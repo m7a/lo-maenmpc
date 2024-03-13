@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project default="build">
+
+<!-- APPLICATION METADATA -->
+<property name="masysma.target"  value="maenmpc"/> 
+<property name="mdpc.name"       value="mdvl-maenmpc"/>
+<property name="mdpc.section"    value="sound"/>
+<property name="mdpc.descrs"
+			>Ma_Sys.ma Erlang NCurses Music Player Client</property>
+<property name="mdpc.arch"       value="any"/>
+<property name="mdpc.bdep"       value="rebar3"/>
+<property name="mdpc.descrl">
+ Experimental Audio Player Stuff
+</property>
+<!-- TODO NEED TO PROPERLY SPECIFY DEPENDENCY LICENSES -->
+
+<!--
+<property name="mdpc.file.install">
+cecho-0.6.0/_build/default/lib/cecho/ebin /usr/lib/erlang/lib/cecho-0.6.0
+cecho-0.6.0/priv /usr/lib/erlang/lib/cecho-0.6.0
+cecho-0.6.0/include /usr/lib/erlang/lib/cecho-0.6.0
+cecho-0.6.0/src /usr/lib/erlang/lib/cecho-0.6.0
+</property>
+-->
+
+<!-- PART OF TPL HERE FOR USE IN BUILD -->
+<property environment="env"/>
+<condition property="masysma.internal.includepath.rel" value="${env.MDVL_CI_PHOENIX_ROOT}" else=".."><isset property="env.MDVL_CI_PHOENIX_ROOT"/></condition>
+<property name="masysma.internal.includepath" location="${masysma.internal.includepath.rel}"/>
+
+<!-- SPECIFIC BUILD -->
+<target name="download">
+	<mkdir dir="_checkouts"/>
+	<!-- TODO CURRENTLY REQUIRES CUSTOM PATCHES / MAYBE WE CAN GET THEM UPSTREAM LATER? -->
+	<masysma_require_artifact
+			masysmaartifact="erlmpd.git"
+			masysmaatarget="_checkouts/erlmpd"
+			masysmaadef="https://github.com/caolan/erlmpd.git"/>
+</target>
+
+<target name="build" depends="download">
+	<exec executable="rebar3" failonerror="true">
+		<arg value="release"/>
+	</exec>
+</target>
+
+<target name="run" depends="build">
+	<exec executable="./_build/default/rel/maenmpc/bin/maenmpc"
+							failonerror="true">
+		<arg value="foreground"/>
+	</exec>
+</target>
+
+<target name="clean">
+	<exec executable="rebar3" failonerror="true">
+		<arg value="clean"/>
+	</exec>
+</target>
+
+<!-- CI INTEGRATION -->
+<!-- <target name="autoci" depends="autopackage"/> -->
+
+<!-- TPL IMPORT (PARTIALLY GIVEN ABOVE) -->
+<property name="masysma.internal.loadpath" value="${masysma.internal.includepath}/co-build/ant-build-template.xml"/>
+<condition property="masysma.internal.load" value="file://${masysma.internal.loadpath}" else="https://raw.githubusercontent.com/m7a/co-build/master/ant-build-template.xml"><resourceexists><file file="${masysma.internal.loadpath}"/></resourceexists></condition>
+<import><url url="${masysma.internal.load}"/></import>
+
+</project>
