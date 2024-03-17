@@ -3,7 +3,7 @@
 	{vsn,          "0.1.0"},
 	{registered,   []},
 	{mod,          {maenmpc_app, []}},
-	{applications, [kernel, stdlib, sasl, cecho]},
+	{applications, [kernel, stdlib, sasl, inets, jiffy, cecho, erlmpd]},
 	{env,          []},
 	{modules,      []},
 	{licenses,     ["GPL-3+"]},

@@ -8,6 +8,7 @@
 <property name="mdpc.descrs"
 			>Ma_Sys.ma Erlang NCurses Music Player Client</property>
 <property name="mdpc.arch"       value="any"/>
+<property name="mdpc.depends"    value="erlang-jiffy, erlang-inets"/>
 <property name="mdpc.bdep"       value="rebar3"/>
 <property name="mdpc.descrl">
  Experimental Audio Player Stuff
