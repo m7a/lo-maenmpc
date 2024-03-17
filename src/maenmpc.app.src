@@ -3,7 +3,9 @@
 	{vsn,          "0.1.0"},
 	{registered,   []},
 	{mod,          {maenmpc_app, []}},
-	{applications, [kernel, stdlib, sasl, inets, jiffy, cecho, erlmpd]},
+	{applications, [kernel, stdlib, sasl, inets, jiffy, erlmpd]},
+	% Do not start cecho by default to support CLI use!
+	{included_applications, [cecho]},
 	{env,          []},
 	{modules,      []},
 	{licenses,     ["GPL-3+"]},

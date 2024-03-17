@@ -6,7 +6,7 @@ start(_StartType, _StartArgs) ->
 	{ok, MPDList}        = application:get_env(maenmpc, mpd),
 	{ok, PrimaryRatings} = application:get_env(maenmpc, primary_ratings),
 	{ok, Maloja}         = application:get_env(maenmpc, maloja),
-	cecho:endwin(), % TODO ALT NOT LOAD CECHO BY DEFAULT (MAY BE RC?)
+	% cecho:endwin(), % TODO ALT NOT LOAD CECHO BY DEFAULT (MAY BE RC?)
 	case maenmpc_cli:run(MPDList, PrimaryRatings, Maloja) of
 	ok ->
 		init:stop(0),
