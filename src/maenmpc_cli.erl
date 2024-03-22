@@ -6,22 +6,30 @@
 -define(SCROBBLESTEP1, 3600).
 -define(SCROBBLESTEP2, 240).
 
--record(song, {gmbidx, path, artist, album, title, year, lastplay, playcount,
-		rating}).
--type song() :: #song{gmbidx::integer(), path::binary(), artist::binary(),
-		album::binary(), title::binary(), year::integer(),
-		lastplay::integer(), playcount::integer(), rating::integer()}.
-
 % return ok to signal success, {error, "Descr"} for failure, {next, _Params}
 % to exec to app
 run(MPDList, PrimaryRatings, Maloja) ->
 	case init:get_argument(help) of
 	{ok, _Any} -> usage();
 	_NoHelpArg ->
-		case init:get_argument(gmbrc) of
-		{ok, [[Path]]} -> use_gmbrc(MPDList, PrimaryRatings, Maloja,
-									Path);
-		_NoGMBRCArg    -> {next, []}
+		case init:get_argument(radio) of
+		{ok, SelectedMPD} ->
+			case SelectedMPD of
+			[[]] ->
+				[{MPDName, _Config}|_Rest] = MPDList,
+				radio(MPDList, PrimaryRatings, Maloja, MPDName);
+			[[MPDName]] ->
+				radio(MPDList, PrimaryRatings, Maloja, MPDName);
+			_Other ->
+				io:fwrite(
+				"Multiple MPD names are not supported.~n")
+			end;
+		_NoRadioArg ->
+			case init:get_argument(gmbrc) of
+			{ok, [[Path]]} -> use_gmbrc(MPDList, PrimaryRatings,
+								Maloja, Path);
+			_NoGMBRCArg    -> {next, []}
+			end
 		end
 	end.
 
@@ -29,9 +37,135 @@ usage() ->
 	io:fwrite(
 "USAGE $0 foreground                          -- run regularly~n" ++
 "USAGE $0 foregorund -help                    -- this page~n" ++
+"USAGE $0 foregorund -radio [MPDNAME]         -- play custom music radio~n" ++
 "USAGE $0 foregorund -mpdsticker -gmbrc GMBRC -- import ratings~n" ++
 "USAGE $0 foreground -scrobble   -gmbrc GMBRC -- import playcounts~n"
 	).
+
+%--------------------------------------------------------------------[ Radio ]--
+% TODO IMPLEMENTED HERE FOR TESTING PURPOSES ONLY. MOVE CODE TO SENSIBLE LOCATION
+%      ONCE IT IS CLEAR WHAT IT WOULD BE
+% https://mpd.readthedocs.io/en/latest/protocol.html
+-record(plsong, {key, player, uri, artist, album, title, playcount, rating}).
+-type plsong() :: #plsong{key::binary(), player::atom(), uri::binary(),
+			artist::binary(), album::binary(), title::binary(),
+			playcount::integer(), rating::integer()}.
+
+radio(MPDList, PrimaryRatings, Maloja, UseMPD) ->
+	io:fwrite("[ INFO  ] radio~n"),
+	ets:new(pl_songs,    [bag, named_table, {keypos, #plsong.key}]),
+	ets:new(album_cache, [bag, named_table]),
+
+	%io:fwrite("[ INFO  ] query use~n"),
+	%Use = query_all(UseMPD, MPDList),
+
+	io:fwrite("[ INFO  ] query primary~n"),
+	Primary = query_all(PrimaryRatings, MPDList),
+
+	% TODO DROP ALL THAT ARE PRESENT IN ONLY ONE OF THE DBS?
+
+	io:fwrite("[ INFO  ] associate playcounts~n"),
+	URL = proplists:get_value(url, Maloja),
+	Key = proplists:get_value(key, Maloja),
+	{ok, {_Status, _Headers, AllScrobblesRaw}} = httpc:request(
+			io_lib:format("~s/scrobbles?key=~s&perpage=10000000",
+			[URL, uri_string:quote(Key)])),
+	AllScrobbles = jiffy:decode(AllScrobblesRaw, [return_maps]),
+	lists:foreach(fun(Scrobble) ->
+			ScrobbleTrack = maps:get(<<"track">>, Scrobble),
+			ScrobbleAlbum = maps:get(<<"album">>, ScrobbleTrack),
+			[Artist|_Others] = maps:get(<<"artists">>, ScrobbleTrack),
+			Title = maps:get(<<"title">>, ScrobbleTrack),
+			Album = case ScrobbleAlbum of
+				null ->
+					CK = iolist_to_binary([Artist, <<"|">>,
+									Title]),
+					case ets:lookup(album_cache, CK) of
+					% TODO MAY MAKE SENSE TO PRINT WARNINGS FOR ALL BUT [One] -> One case!
+					[]
+						-> <<>>;
+					[{_Key, One}] ->
+						One;
+					[{_Key, First}|Rem] ->
+						First
+					end;
+				_Other ->
+					maps:get(<<"albumtitle">>,
+								ScrobbleAlbum)
+				end,
+			DBKey = iolist_to_binary([Artist, <<"|">>, Album,
+							<<"|">>, Title]),
+			% TODO ASTAT FAILS FOR TABLE TYPE.
+			%      CONSIDER INTRODUCING THE STEP TO CONVERT FROM bag -> set and retain all keys that are present in both variants in order to fix this here.
+			%ets:update_counter(pl_songs, DBKey, {#plsong.playcount, 1}),
+			io:fwrite("<~p>~n", [DBKey])
+		end, maps:get(<<"list">>, AllScrobbles)),
+	%io:fwrite("<~p>~n", [AllScrobbles]),
+	% numscrobbles
+	% TODO THE CALL THAT CAN QUERY INCLUDING ALBUM is `albuminfo` but it gives an error message
+	% {"status": "error", "error": {"type": "missing_entity_parameter", "value": null, "desc": "This API call is not valid without an entity (track or artist)."}}
+	% TODO ALSO THIS DOES NOT EVEN ACCEPT MULTIPLE PARAMETERS, WILL ALWAYS QUERY FOR ARTIST ONLY. NEED TO RE-THINK IT / HOW TO QUERY A SPECIFIC SCROBBLE. READ PYTHON SOURCE!
+	%Prefix = URL ++ "/numscrobbles?key=" ++ uri_string:quote(Key),
+	%ok = ets:foldr(fun(Element, _AccIn) ->
+	%		Query = io_lib:format(
+	%			"~s&album=~s&artist=~s&title=~s",
+	%			[Prefix, uri_string:quote(Element#plsong.album),
+	%			uri_string:quote(Element#plsong.artist),
+	%			uri_string:quote(Element#plsong.title)]),
+	%		{ok, Response} = httpc:request(Query),
+	%		io:fwrite("~p [~s] ->~n   ~p~n", [Element, Query,
+	%							Response]),
+	%		ok
+	%	end, ok, pl_songs),
+	% TODO MALOJA INTERACTION HERE...
+	%KeyParam = "?key=" ++ uri_string:quote(Key),
+	%{ok, Result} = httpc:request(Endpoint ++ KeyParam ++ "&perpage=1000000"),
+	%io:fwrite("-> ~p~n", [Result]),
+
+	io:fwrite("[ INFO  ] associate ratings~n"),
+	% ...
+	% TODO STICEKRS INTERACTION HERE
+	ets:delete(album_cache),
+	ets:delete(pl_songs),
+	ok.
+
+query_all(MPDName, MPDList) ->
+	HostPort = proplists:get_value(ip,
+					proplists:get_value(MPDName, MPDList)),
+	{Host, Port} = HostPort,
+	{ok, Conn} = erlmpd:connect(Host, Port),
+	lists:foreach(fun(Entry) ->
+			PLS = entry_to_plsong(Entry),
+			ets:insert(pl_songs, PLS#plsong{player=MPDName}),
+			ets:insert(album_cache,
+				{iolist_to_binary([PLS#plsong.artist, "|",
+					PLS#plsong.title]), PLS#plsong.album})
+		% Query all data (modified-since '0') or (base '')
+		end, erlmpd:find(Conn, "(base '')")),
+	erlmpd:disconnect(Conn),
+	HostPort.
+
+entry_to_plsong(Entry) ->
+	URI    = proplists:get_value(file,     Entry),
+	Artist = proplists:get_value('Artist', Entry, <<>>),
+	Album  = proplists:get_value('Album',  Entry, <<>>),
+	Title  = proplists:get_value('Title',  Entry, <<>>),
+	#plsong{
+		key=iolist_to_binary([Artist, "|", Album, "|", Title]),
+		uri=URI,
+		artist=Artist,
+		album=Album,
+		title=Title,
+		playcount=0,
+		rating=-1
+	}.
+
+%------------------------------------------------------------[ GMBRC Parsing ]--
+-record(gmbsong, {gmbidx, path, artist, album, title, year, lastplay, playcount,
+		rating}).
+-type gmbsong() :: #gmbsong{gmbidx::integer(), path::binary(), artist::binary(),
+		album::binary(), title::binary(), year::integer(),
+		lastplay::integer(), playcount::integer(), rating::integer()}.
 
 use_gmbrc(MPDList, PrimaryRatings, Maloja, Path) ->
 	database_read(Path),
@@ -46,14 +180,13 @@ use_gmbrc(MPDList, PrimaryRatings, Maloja, Path) ->
 	ets:delete(gmb_songs),
 	RV.
 
-%------------------------------------------------------------[ GMBRC Parsing ]--
 database_read(GMBRC) ->
 	io:fwrite("Read GMBRC... "),
 	{ok, RawDataBinary} = file:read_file(GMBRC),
 	{await_eof, Lines, _Keys} = lists:foldl(fun database_line/2,
 			{await_marker, invalid, invalid},
 			binary:split(RawDataBinary, <<"\n">>, [global, trim])),
-	ets:new(gmb_songs, [set, named_table, {keypos, #song.gmbidx}]),
+	ets:new(gmb_songs, [set, named_table, {keypos, #gmbsong.gmbidx}]),
 	lists:foreach(fun database_convert_store/1, Lines),
 	io:fwrite("OK~n").
 
@@ -79,7 +212,7 @@ database_convert_store(L) ->
 	%                are present
 	case file_exists(Path) of
 	true ->
-		ets:insert(gmb_songs, #song{
+		ets:insert(gmb_songs, #gmbsong{
 			gmbidx=binary_to_integer(
 						database_keyfind(<<"idx">>, L)),
 			path=Path,
@@ -123,17 +256,19 @@ import_ratings_to_stickers(MPDList, PrimaryRatings) ->
 	Root = find_root_directory(Conn),
 	RootLen = byte_size(Root),
 	io:fwrite("root = ~p~n", [Root]),
-	RatedSongs = ets:select(gmb_songs,
-			ets:fun2ms(fun(X) when X#song.rating /= -1 -> X end)),
+	RatedSongs = ets:select(gmb_songs, ets:fun2ms(
+				fun(X) when X#gmbsong.rating /= -1 -> X end)),
 	lists:foreach(fun(Song) ->
-			CheckPrefix = binary:part(Song#song.path, 0, RootLen),
+			CheckPrefix = binary:part(Song#gmbsong.path, 0,
+								RootLen),
 			case CheckPrefix == Root of
 			true ->
 				UseKey = binary_to_list(binary:part(
-					Song#song.path, RootLen,
-					byte_size(Song#song.path) - RootLen)),
-				Rating = float_to_list(
-						max(1, Song#song.rating / 10),
+						Song#gmbsong.path, RootLen,
+						byte_size(Song#gmbsong.path) -
+						RootLen)),
+				Rating = float_to_list(max(1,
+						Song#gmbsong.rating / 10),
 						[{decimals, 0}]),
 				io:fwrite("ASSIGN ~s = ~s~n", [UseKey, Rating]),
 				ok = erlmpd:sticker(Conn, set, "song", UseKey,
@@ -141,7 +276,7 @@ import_ratings_to_stickers(MPDList, PrimaryRatings) ->
 			false ->
 				io:fwrite("ERROR Prefix mismatch for ~s: " ++
 					"~s /= ~s~n. Skipped...~n",
-					[Song#song.path, CheckPrefix, Root])
+					[Song#gmbsong.path, CheckPrefix, Root])
 			end
 		end, RatedSongs),
 	erlmpd:disconnect(Conn).
@@ -159,12 +294,13 @@ find_root_directory(Conn) ->
 	end.
 
 extract_root(Conn, Song) ->
-	PathGMB = filename:rootname(Song#song.path),
+	PathGMB = filename:rootname(Song#gmbsong.path),
 	% by enforcing ASCII subset we need not quote inside the matching
 	% expression!
 	[Result] = erlmpd:find(Conn, io_lib:format("((artist == '~s') "
-			++ "AND (album == '~s') AND (title == '~s'))",
-			[Song#song.artist, Song#song.album, Song#song.title])),
+				++ "AND (album == '~s') AND (title == '~s'))",
+				[Song#gmbsong.artist, Song#gmbsong.album,
+				Song#gmbsong.title])),
 	PathMPD   = filename:rootname(proplists:get_value(file, Result)),
 	SuffixLen = binary:longest_common_suffix([PathGMB, PathMPD]),
 	case SuffixLen == byte_size(PathMPD) of
@@ -181,9 +317,9 @@ find_alpha_songs(_Tab, _Key, Acc) when length(Acc) >= 3 ->
 find_alpha_songs(Tab, Key, Acc) ->
 	[Song] = ets:lookup(Tab, Key),
 	find_alpha_songs(Tab, ets:next(Tab, Key),
-			case validate_alpha(Song#song.artist) andalso
-					validate_alpha(Song#song.album) andalso
-					validate_alpha(Song#song.title) of
+			case validate_alpha(Song#gmbsong.artist) andalso
+				validate_alpha(Song#gmbsong.album) andalso
+				validate_alpha(Song#gmbsong.title) of
 			true  -> [Song|Acc];
 			false -> Acc
 			end). 
@@ -200,19 +336,19 @@ import_playcounts_to_scrobbles(Maloja) ->
 	Key = proplists:get_value(key, Maloja),
 	Endpoint = URL ++ "/newscrobble",
 	KeyParam = "key=" ++ uri_string:quote(Key),
-	PlayedSongs = ets:select(gmb_songs,
-			ets:fun2ms(fun(X) when X#song.playcount >= 1 -> X end)),
+	PlayedSongs = ets:select(gmb_songs, ets:fun2ms(
+				fun(X) when X#gmbsong.playcount >= 1 -> X end)),
 	io:fwrite("[ INFO  ] begin scrobbling...~n"),
 	{OK, OKExists, Fail} = merge_stats([merge_stats(
 			[generate_scrobble(Endpoint, KeyParam, Song, X) ||
-				X <- lists:seq(1, Song#song.playcount)]
+				X <- lists:seq(1, Song#gmbsong.playcount)]
 		) || Song <- PlayedSongs]),
 	io:fwrite("[ INFO  ] Added=~w AlreadyKnown=~w Failed=~w" ++
 				" (see messages above for failures)~n",
 				[OK, OKExists, Fail]).
 
 % Return a triple of OK_Added|OK_Exists|Fail
--spec generate_scrobble(Endpoint::string(), KeyParam::string(), Song::song(),
+-spec generate_scrobble(Endpoint::string(), KeyParam::string(), Song::gmbsong(),
 			Nth::integer()) -> {integer(), integer(), integer()}.
 % Example Data: Successful Scrobble
 %   Result = {{"HTTP/1.1",200,"OK"},
@@ -262,12 +398,12 @@ generate_scrobble(Endpoint, KeyParam, Song, Nth) ->
 	%   TL;DR: This algorithm works incrementally and is idempotent such as
 	% long as the GMBRC is not replaced but only “continued” compared to
 	% previous imports.
-	VirtualTimestamp = ?SCROBBLEBASE - Song#song.gmbidx * ?SCROBBLESTEP1
+	VirtualTimestamp = ?SCROBBLEBASE - Song#gmbsong.gmbidx * ?SCROBBLESTEP1
 							- Nth * ?SCROBBLESTEP2,
 	Query = io_lib:format("~s&artist=~s&title=~s&album=~s&time=~w",
-			[KeyParam, uri_string:quote(Song#song.artist),
-			uri_string:quote(Song#song.title),
-			uri_string:quote(Song#song.album), VirtualTimestamp]),
+			[KeyParam, uri_string:quote(Song#gmbsong.artist),
+			uri_string:quote(Song#gmbsong.title),
+			uri_string:quote(Song#gmbsong.album), VirtualTimestamp]),
 	% https://stackoverflow.com/questions/19103694/simple-example-using-
 	{ok, {_HTTPStatus, _Headers, Body}} = httpc:request(post, {Endpoint, [],
 			"application/x-www-form-urlencoded", Query}, [], []),
