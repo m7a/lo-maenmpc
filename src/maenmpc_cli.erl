@@ -45,120 +45,224 @@ usage() ->
 %--------------------------------------------------------------------[ Radio ]--
 % TODO IMPLEMENTED HERE FOR TESTING PURPOSES ONLY. MOVE CODE TO SENSIBLE LOCATION
 %      ONCE IT IS CLEAR WHAT IT WOULD BE
+
 % https://mpd.readthedocs.io/en/latest/protocol.html
--record(plsong, {key, player, uri, artist, album, title, playcount, rating}).
--type plsong() :: #plsong{key::binary(), player::atom(), uri::binary(),
-			artist::binary(), album::binary(), title::binary(),
-			playcount::integer(), rating::integer()}.
+
+% key          := {Artist, Album, Title}
+% assoc_status := primary_only, use_only, ok
+-record(plsong, {key, rating_uri, playcount, rating, assoc_status}).
+-type plsong() :: #plsong{key::{binary(), binary(), binary()},
+			rating_uri::binary(), playcount::integer(),
+			rating::integer(), assoc_status::atom()}.
 
 radio(MPDList, PrimaryRatings, Maloja, UseMPD) ->
 	io:fwrite("[ INFO  ] radio~n"),
-	ets:new(pl_songs,    [bag, named_table, {keypos, #plsong.key}]),
-	ets:new(album_cache, [bag, named_table]),
-
-	%io:fwrite("[ INFO  ] query use~n"),
-	%Use = query_all(UseMPD, MPDList),
+	ets:new(plsongs, [set, named_table, {keypos, #plsong.key}]),
 
 	io:fwrite("[ INFO  ] query primary~n"),
-	Primary = query_all(PrimaryRatings, MPDList),
+	ConnPrimary = erlmpd_connect(PrimaryRatings, MPDList),
+	EmptyKeys = lists:foldr(fun(Entry, Acc) ->
+			PLS = erlmpd_to_plsong(Entry),
+			case PLS#plsong.key == {<<>>, <<>>, <<>>} of
+			true ->
+				% Not even a warning, because typically it
+				% is OK to exclude those files w/o metadata.
+				Acc + 1;
+			false ->
+				case ets:insert_new(plsongs,
+					PLS#plsong{assoc_status=primary_only})
+				of
+				true  -> ok;
+				false -> io:fwrite("[WARNING] Duplicate " ++
+						"~p at ~s~n", [PLS#plsong.key,
+						PLS#plsong.rating_uri])
+				end,
+				Acc
+			end
+		end, 0, erlmpd_find_all(ConnPrimary)),
+	erlmpd:disconnect(ConnPrimary),
+	io:fwrite("[ INFO  ] skipped ~w empty keys~n", [EmptyKeys]),
 
-	% TODO DROP ALL THAT ARE PRESENT IN ONLY ONE OF THE DBS?
+	io:fwrite("[ INFO  ] query use~n"),
+	ConnUse = erlmpd_connect(UseMPD, MPDList),
+	lists:foreach(fun(Entry) ->
+			PLS = erlmpd_to_plsong(Entry),
+			case PLS#plsong.key == {<<>>, <<>>, <<>>} of
+			true -> pass_empty_keys;
+			false ->
+				case ets:update_element(plsongs, PLS#plsong.key,
+						{#plsong.assoc_status, ok}) of
+				true  -> updated_ok;
+				false -> % Not found
+					io:fwrite("[WARNING] Not found " ++
+							"locally: ~p~n",
+							[PLS#plsong.key]),
+					ets:insert(plsongs, PLS#plsong{
+							assoc_status=use_only})
+				end
+			end
+		end, erlmpd_find_all(ConnUse)),
+	erlmpd:disconnect(ConnUse),
 
 	io:fwrite("[ INFO  ] associate playcounts~n"),
 	URL = proplists:get_value(url, Maloja),
 	Key = proplists:get_value(key, Maloja),
+	% TODO z if this limit is exceeded need to either adjust Maloja to
+	%      do the querying for us or query multiple pages or limit the
+	%      time range!
 	{ok, {_Status, _Headers, AllScrobblesRaw}} = httpc:request(
-			io_lib:format("~s/scrobbles?key=~s&perpage=10000000",
+			io_lib:format("~s/scrobbles?key=~s&perpage=16777216",
 			[URL, uri_string:quote(Key)])),
-	AllScrobbles = jiffy:decode(AllScrobblesRaw, [return_maps]),
-	lists:foreach(fun(Scrobble) ->
-			ScrobbleTrack = maps:get(<<"track">>, Scrobble),
-			ScrobbleAlbum = maps:get(<<"album">>, ScrobbleTrack),
-			[Artist|_Others] = maps:get(<<"artists">>, ScrobbleTrack),
-			Title = maps:get(<<"title">>, ScrobbleTrack),
-			Album = case ScrobbleAlbum of
-				null ->
-					CK = iolist_to_binary([Artist, <<"|">>,
-									Title]),
-					case ets:lookup(album_cache, CK) of
-					% TODO MAY MAKE SENSE TO PRINT WARNINGS FOR ALL BUT [One] -> One case!
-					[]
-						-> <<>>;
-					[{_Key, One}] ->
-						One;
-					[{_Key, First}|Rem] ->
-						First
-					end;
-				_Other ->
-					maps:get(<<"albumtitle">>,
-								ScrobbleAlbum)
-				end,
-			DBKey = iolist_to_binary([Artist, <<"|">>, Album,
-							<<"|">>, Title]),
-			% TODO ASTAT FAILS FOR TABLE TYPE.
-			%      CONSIDER INTRODUCING THE STEP TO CONVERT FROM bag -> set and retain all keys that are present in both variants in order to fix this here.
-			%ets:update_counter(pl_songs, DBKey, {#plsong.playcount, 1}),
-			io:fwrite("<~p>~n", [DBKey])
-		end, maps:get(<<"list">>, AllScrobbles)),
-	%io:fwrite("<~p>~n", [AllScrobbles]),
-	% numscrobbles
-	% TODO THE CALL THAT CAN QUERY INCLUDING ALBUM is `albuminfo` but it gives an error message
-	% {"status": "error", "error": {"type": "missing_entity_parameter", "value": null, "desc": "This API call is not valid without an entity (track or artist)."}}
-	% TODO ALSO THIS DOES NOT EVEN ACCEPT MULTIPLE PARAMETERS, WILL ALWAYS QUERY FOR ARTIST ONLY. NEED TO RE-THINK IT / HOW TO QUERY A SPECIFIC SCROBBLE. READ PYTHON SOURCE!
-	%Prefix = URL ++ "/numscrobbles?key=" ++ uri_string:quote(Key),
-	%ok = ets:foldr(fun(Element, _AccIn) ->
-	%		Query = io_lib:format(
-	%			"~s&album=~s&artist=~s&title=~s",
-	%			[Prefix, uri_string:quote(Element#plsong.album),
-	%			uri_string:quote(Element#plsong.artist),
-	%			uri_string:quote(Element#plsong.title)]),
-	%		{ok, Response} = httpc:request(Query),
-	%		io:fwrite("~p [~s] ->~n   ~p~n", [Element, Query,
-	%							Response]),
-	%		ok
-	%	end, ok, pl_songs),
-	% TODO MALOJA INTERACTION HERE...
-	%KeyParam = "?key=" ++ uri_string:quote(Key),
-	%{ok, Result} = httpc:request(Endpoint ++ KeyParam ++ "&perpage=1000000"),
-	%io:fwrite("-> ~p~n", [Result]),
+	lists:foreach(fun scrobble_to_playcount/1, maps:get(<<"list">>,
+				jiffy:decode(AllScrobblesRaw, [return_maps]))),
 
 	io:fwrite("[ INFO  ] associate ratings~n"),
-	% ...
-	% TODO STICEKRS INTERACTION HERE
-	ets:delete(album_cache),
-	ets:delete(pl_songs),
+	ConnRatings = erlmpd_connect(PrimaryRatings, MPDList),
+	RatingsRaw = erlmpd:sticker(ConnRatings, find, "song", "", "rating"),
+	erlmpd:disconnect(ConnRatings),
+	assign_ratings(RatingsRaw),
+
+	%io:fwrite("[ INFO  ] Hello DB~n"),
+	%ets:foldl(fun(El, _Acc) ->
+	%		io:fwrite("~p~n", [El#plsong{}])
+	%	end, ok, plsongs),
+
+	% TODO DROP ALL primary_only with warning!
+	% TODO FILTER OUT THOSE WHICH ARE NOT FOR RADIO PLAYBACK / BY WHAT MEANS / ALLOW PATH REGEX TO TEST!
+	% TODO THEN ONWARDS TO PLAYLIST COMPUTATION HERE!
+
+	ets:delete(plsongs),
 	ok.
 
-query_all(MPDName, MPDList) ->
+erlmpd_connect(MPDName, MPDList) ->
 	HostPort = proplists:get_value(ip,
 					proplists:get_value(MPDName, MPDList)),
 	{Host, Port} = HostPort,
 	{ok, Conn} = erlmpd:connect(Host, Port),
-	lists:foreach(fun(Entry) ->
-			PLS = entry_to_plsong(Entry),
-			ets:insert(pl_songs, PLS#plsong{player=MPDName}),
-			ets:insert(album_cache,
-				{iolist_to_binary([PLS#plsong.artist, "|",
-					PLS#plsong.title]), PLS#plsong.album})
-		% Query all data (modified-since '0') or (base '')
-		end, erlmpd:find(Conn, "(base '')")),
-	erlmpd:disconnect(Conn),
-	HostPort.
+	Conn.
 
-entry_to_plsong(Entry) ->
-	URI    = proplists:get_value(file,     Entry),
-	Artist = proplists:get_value('Artist', Entry, <<>>),
-	Album  = proplists:get_value('Album',  Entry, <<>>),
-	Title  = proplists:get_value('Title',  Entry, <<>>),
-	#plsong{
-		key=iolist_to_binary([Artist, "|", Album, "|", Title]),
-		uri=URI,
-		artist=Artist,
-		album=Album,
-		title=Title,
+% Query all data (modified-since '0') or (base '')
+erlmpd_find_all(Conn) ->
+	erlmpd:find(Conn, "(base '')").
+
+erlmpd_to_plsong(Entry) ->
+	#plsong{key=erlmpd_to_key(Entry),
+		rating_uri=normalize_always(proplists:get_value(file, Entry)),
 		playcount=0,
-		rating=-1
-	}.
+		rating=-1}.
+
+erlmpd_to_key(Entry) ->
+	{normalize_key(proplists:get_value('Artist',   Entry, <<>>)),
+	 normalize_strong(proplists:get_value('Album', Entry, <<>>)),
+	 normalize_key(proplists:get_value('Title',    Entry, <<>>))}.
+
+% Expensive normalization option required due to the fact that scrobbling or
+% Maloja seem to mess with the supplied metadata.
+normalize_key(Value) ->
+	normalize_always(normalize_safe(Value)).
+
+normalize_safe(Value) ->
+	re:replace(string:replace(string:replace(
+				lists:join(<<" ">>, string:lexemes(Value, " ")),
+			"[", "("), "]", ")"),
+		" \\(?feat\\.? .*$", "").
+
+normalize_strong(Value) ->
+	normalize_always(re:replace(normalize_safe(Value), " \\(.*\\)$", "")).
+
+normalize_always(Value) ->
+	unicode:characters_to_nfc_binary(Value).
+
+scrobble_to_playcount(Scrobble) ->
+	ScrobbleTrack = maps:get(<<"track">>, Scrobble),
+	ScrobbleAlbum = maps:get(<<"album">>, ScrobbleTrack),
+	TitleRaw = maps:get(<<"title">>, ScrobbleTrack),
+	Titles = [normalize_key(TitleRaw), normalize_strong(TitleRaw)],
+	Artists = case maps:get(<<"artists">>, ScrobbleTrack) of
+		[A1|[A2|[]]] -> [normalize_key([A1, <<" & ">>, A2])|
+				[normalize_key([A2, <<" & ">>, A1])|
+				[A1|[A2|[]]]]];
+		OtherArtists -> OtherArtists
+	end,
+	Result = lists:foldl(fun({Title, ArtistRaw}, Acc) ->
+		case Acc of
+		1 -> 1;
+		0 ->
+			Artist = normalize_key(ArtistRaw),
+			case ScrobbleAlbum of
+			null ->
+				case ets:select(plsongs, ets:fun2ms(fun(X) when
+						element(1, X#plsong.key) ==
+								Artist andalso
+						element(3, X#plsong.key) ==
+								Title
+					-> element(2, X#plsong.key) end))
+				of
+				[] ->
+					0;
+				[AlbumI] ->
+					plsongs_inc({Artist, AlbumI, Title});
+				[AlbumI|_OtherAlbums] ->
+					io:fwrite("[WARNING] Not unique: " ++
+						"<~s/~s> -> <~s>~n",
+						[Artist, Title, AlbumI]),
+					plsongs_inc({Artist, AlbumI, Title})
+				end;
+			_Other ->
+				AlbumTitle = normalize_strong(maps:get(
+					<<"albumtitle">>, ScrobbleAlbum)),
+				CheckKey = {Artist, AlbumTitle, Title},
+				case ets:lookup(plsongs, CheckKey) of
+				[]     -> 0;
+				[Item] -> plsongs_inc(CheckKey)
+				% other case prevented by set property of table!
+				end
+			end
+		end
+	end, 0, [{Title, Artist} || Title <- Titles, Artist <- Artists]),
+	case Result of
+	1 -> ok;
+	0 -> io:fwrite("[WARNING] Skipped: ~p~n", [ScrobbleTrack])
+	end.
+
+plsongs_inc(Key) ->
+	ets:update_counter(plsongs, Key, {#plsong.playcount, 1}),
+	1.
+
+assign_ratings([]) ->
+	ok;
+assign_ratings([File|[Sticker|Remainder]]) ->
+	[_ConstFile|[PathRaw|[]]] = string:split(File, ": "),
+	[_ConstSticker|[Stickers|[]]] = string:split(Sticker, ": "),
+	Path = normalize_always(PathRaw),
+	DBKey = case ets:select(plsongs, ets:fun2ms(fun(X) when
+				X#plsong.rating_uri == Path -> X#plsong.key
+			end)) of
+		[] -> io:fwrite("[WARNING] Not in DB: ~p~n", [Path]);
+		[UniqueKey] -> UniqueKey;
+		MultipleResults -> io:fwrite("[WARNING] Rating not unique: " ++
+				"~s: ~p. Skipped...~n", [Path, MultipleResults])
+		end,
+	Rating = lists:foldl(fun(KV, Acc) ->
+			[Key|[Value|[]]] = string:split(KV, "="),
+			case Key == "rating" of
+			true ->
+				% Found rating, compute * 10 with 10 map to 0.
+				case list_to_integer(Value) of
+				1      -> 0;
+				NotOne -> NotOne * 10
+				end;
+			% Skip this sticker
+			false -> Acc
+			end
+		end, nothing, string:split(Stickers, " ")),
+	case {DBKey, Rating} of
+	{ok,       _AnyRating}  -> skip;
+	{_AnyKey,  nothing}     -> skip;
+	{_GoodKey, _GoodRating} -> ets:update_element(plsongs, DBKey,
+						{#plsong.rating, Rating})
+	end,
+	assign_ratings(Remainder).
 
 %------------------------------------------------------------[ GMBRC Parsing ]--
 -record(gmbsong, {gmbidx, path, artist, album, title, year, lastplay, playcount,
