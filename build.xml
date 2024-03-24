@@ -58,8 +58,8 @@ cecho-0.6.0/src /usr/lib/erlang/lib/cecho-0.6.0
 	</exec>
 </target>
 
-<!-- CI INTEGRATION -->
-<!-- <target name="autoci" depends="autopackage"/> -->
+<!-- CI INTEGRATION / currently disabled. commenting out is not enough.... -->
+<!-- <target name=       "aut____oci" depends="autopackage"/> -->
 
 <!-- TPL IMPORT (PARTIALLY GIVEN ABOVE) -->
 <property name="masysma.internal.loadpath" value="${masysma.internal.includepath}/co-build/ant-build-template.xml"/>
