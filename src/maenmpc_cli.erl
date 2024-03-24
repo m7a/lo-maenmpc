@@ -1,5 +1,5 @@
 -module(maenmpc_cli).
--export([run/3]).
+-export([run/4]).
 -include_lib("stdlib/include/ms_transform.hrl").
 
 -define(SCROBBLEBASE,  1700000000).
@@ -8,7 +8,7 @@
 
 % return ok to signal success, {error, "Descr"} for failure, {next, _Params}
 % to exec to app
-run(MPDList, PrimaryRatings, Maloja) ->
+run(MPDList, PrimaryRatings, Maloja, RadioConf) ->
 	case init:get_argument(help) of
 	{ok, _Any} -> usage();
 	_NoHelpArg ->
@@ -17,9 +17,11 @@ run(MPDList, PrimaryRatings, Maloja) ->
 			case SelectedMPD of
 			[[]] ->
 				[{MPDName, _Config}|_Rest] = MPDList,
-				radio(MPDList, PrimaryRatings, Maloja, MPDName);
+				radio(MPDList, PrimaryRatings, Maloja, MPDName,
+					RadioConf);
 			[[MPDName]] ->
-				radio(MPDList, PrimaryRatings, Maloja, MPDName);
+				radio(MPDList, PrimaryRatings, Maloja,
+					list_to_atom(MPDName), RadioConf);
 			_Other ->
 				io:fwrite(
 				"Multiple MPD names are not supported.~n")
@@ -50,19 +52,21 @@ usage() ->
 
 % key          := {Artist, Album, Title}
 % assoc_status := primary_only, use_only, ok
--record(plsong, {key, rating_uri, playcount, rating, assoc_status}).
+-record(plsong, {key, rating_uri, use_uri, playcount, rating, assoc_status}).
 -type plsong() :: #plsong{key::{binary(), binary(), binary()},
-			rating_uri::binary(), playcount::integer(),
-			rating::integer(), assoc_status::atom()}.
+				rating_uri::binary(), use_uri::binary(),
+				playcount::integer(), rating::integer(),
+				assoc_status::atom()}.
 
-radio(MPDList, PrimaryRatings, Maloja, UseMPD) ->
+radio(MPDList, PrimaryRatings, Maloja, UseMPD, RadioConf) ->
 	io:fwrite("[ INFO  ] radio~n"),
 	ets:new(plsongs, [set, named_table, {keypos, #plsong.key}]),
+	DefaultRating = maps:get(default_rating, RadioConf),
 
 	io:fwrite("[ INFO  ] query primary~n"),
 	ConnPrimary = erlmpd_connect(PrimaryRatings, MPDList),
 	EmptyKeys = lists:foldr(fun(Entry, Acc) ->
-			PLS = erlmpd_to_plsong(Entry),
+			PLS = erlmpd_to_plsong(Entry, DefaultRating),
 			case PLS#plsong.key == {<<>>, <<>>, <<>>} of
 			true ->
 				% Not even a warning, because typically it
@@ -86,19 +90,22 @@ radio(MPDList, PrimaryRatings, Maloja, UseMPD) ->
 	io:fwrite("[ INFO  ] query use~n"),
 	ConnUse = erlmpd_connect(UseMPD, MPDList),
 	lists:foreach(fun(Entry) ->
-			PLS = erlmpd_to_plsong(Entry),
+			PLS = erlmpd_to_plsong(Entry, DefaultRating),
 			case PLS#plsong.key == {<<>>, <<>>, <<>>} of
 			true -> pass_empty_keys;
 			false ->
 				case ets:update_element(plsongs, PLS#plsong.key,
-						{#plsong.assoc_status, ok}) of
+						[{#plsong.use_uri,
+							PLS#plsong.rating_uri},
+						{#plsong.assoc_status, ok}]) of
 				true  -> updated_ok;
 				false -> % Not found
 					io:fwrite("[WARNING] Not found " ++
 							"locally: ~p~n",
 							[PLS#plsong.key]),
 					ets:insert(plsongs, PLS#plsong{
-							assoc_status=use_only})
+						assoc_status=use_only,
+						use_uri=PLS#plsong.rating_uri})
 				end
 			end
 		end, erlmpd_find_all(ConnUse)),
@@ -122,14 +129,24 @@ radio(MPDList, PrimaryRatings, Maloja, UseMPD) ->
 	erlmpd:disconnect(ConnRatings),
 	assign_ratings(RatingsRaw),
 
-	%io:fwrite("[ INFO  ] Hello DB~n"),
-	%ets:foldl(fun(El, _Acc) ->
-	%		io:fwrite("~p~n", [El#plsong{}])
-	%	end, ok, plsongs),
+	io:fwrite("[ INFO  ] drop primary only...~n"),
+	RM = ets:select(plsongs, ets:fun2ms(fun(X) when X#plsong.assoc_status ==
+					primary_only -> X#plsong.key end)),
+	lists:foreach(fun(K) -> ets:delete(plsongs, K) end, RM),
+	io:fwrite("[ INFO  ] ~w items removed from DB~n", [length(RM)]),
 
-	% TODO DROP ALL primary_only with warning!
-	% TODO FILTER OUT THOSE WHICH ARE NOT FOR RADIO PLAYBACK / BY WHAT MEANS / ALLOW PATH REGEX TO TEST!
-	% TODO THEN ONWARDS TO PLAYLIST COMPUTATION HERE!
+	% TODO HIGHLY SPECIFIC FOR NOW / DEVISE SOMETHING ELSE. MAYBE
+	%      ALLOW SPECIFYING A MATCH SPEC IN CONFIG OR SOMETHING?
+	io:fwrite("[ INFO  ] filter non-radio songs...~n"),
+	RM2 = ets:select(plsongs, ets:fun2ms(fun(X) when
+			binary_part(X#plsong.rating_uri, {0, 5}) =:= <<"epic/">>
+			-> X#plsong.key end)),
+	lists:foreach(fun(K) -> ets:delete(plsongs, K) end, RM2),
+	io:fwrite("[ INFO  ] ~w items removed from DB~n", [length(RM2)]),
+	
+	ConnUse2 = erlmpd_connect(UseMPD, MPDList),
+	radio_play(ConnUse2, RadioConf),
+	erlmpd:disconnect(ConnUse2),
 
 	ets:delete(plsongs),
 	ok.
@@ -145,11 +162,11 @@ erlmpd_connect(MPDName, MPDList) ->
 erlmpd_find_all(Conn) ->
 	erlmpd:find(Conn, "(base '')").
 
-erlmpd_to_plsong(Entry) ->
+erlmpd_to_plsong(Entry, DefaultRating) ->
 	#plsong{key=erlmpd_to_key(Entry),
 		rating_uri=normalize_always(proplists:get_value(file, Entry)),
 		playcount=0,
-		rating=-1}.
+		rating=DefaultRating}.
 
 erlmpd_to_key(Entry) ->
 	{normalize_key(proplists:get_value('Artist',   Entry, <<>>)),
@@ -213,8 +230,8 @@ scrobble_to_playcount(Scrobble) ->
 					<<"albumtitle">>, ScrobbleAlbum)),
 				CheckKey = {Artist, AlbumTitle, Title},
 				case ets:lookup(plsongs, CheckKey) of
-				[]     -> 0;
-				[Item] -> plsongs_inc(CheckKey)
+				[]      -> 0;
+				[_Item] -> plsongs_inc(CheckKey)
 				% other case prevented by set property of table!
 				end
 			end
@@ -241,7 +258,7 @@ assign_ratings([File|[Sticker|Remainder]]) ->
 		[] -> io:fwrite("[WARNING] Not in DB: ~p~n", [Path]);
 		[UniqueKey] -> UniqueKey;
 		MultipleResults -> io:fwrite("[WARNING] Rating not unique: " ++
-				"~s: ~p. Skipped...~n", [Path, MultipleResults])
+			"~s:~n  ~p. Skipped...~n", [Path, MultipleResults])
 		end,
 	Rating = lists:foldl(fun(KV, Acc) ->
 			[Key|[Value|[]]] = string:split(KV, "="),
@@ -263,6 +280,132 @@ assign_ratings([File|[Sticker|Remainder]]) ->
 						{#plsong.rating, Rating})
 	end,
 	assign_ratings(Remainder).
+
+radio_play(ConnUse, RadioConf) ->
+	io:fwrite("[ INFO  ] Compute schedule...~n"),
+	Schedule = schedule_compute(RadioConf),
+	[H|_T] = Schedule,
+	radio_enqueue(ConnUse, H),
+	radio_play(ConnUse, RadioConf, Schedule).
+
+radio_enqueue(ConnUse, SongKey) ->
+	[Value] = ets:lookup(plsongs, SongKey),
+	URI = binary_to_list(Value#plsong.use_uri),
+	ok = erlmpd:add(ConnUse, URI).
+
+radio_play(ConnUse, RadioConf, [Await2|[]]) ->
+	radio_play(ConnUse, RadioConf, [Await2|schedule_compute(RadioConf)]);
+radio_play(ConnUse, RadioConf, Schedule) ->
+	[Await|TSched] = Schedule,
+	case erlmpd:idle(ConnUse, [player]) of
+	[player] ->
+		% Could be relevant
+		CurrentSong = erlmpd_to_key(erlmpd:currentsong(ConnUse)),
+		case CurrentSong =:= Await of
+		true ->
+			[Next|_Others] = TSched,
+			plsongs_inc(CurrentSong),
+			io:fwrite("FOUND ~s - ~s :: ENQ ~s - ~s~n",
+					[element(1, CurrentSong),
+					element(3, CurrentSong),
+					element(1, Next), element(3, Next)]),
+			radio_enqueue(ConnUse, Next),
+			radio_play(ConnUse, RadioConf, TSched);
+		false ->
+			radio_play(ConnUse, RadioConf, Schedule)
+		end;
+	_Other ->
+		% ignore
+		radio_play(ConnUse, RadioConf, Schedule)
+	end.
+
+% Compute a Music Schedule according to the following algorithm:
+% Partition songs by rating, drop all 1-star rated songs, shuffle the per-rating
+% lists, sort them by play count ASC, ensure that 4+5 stars are at least 30%
+% (if not, repeat them as necessary) and then interleave the lists as to produce
+% a fair playlist with enough good songs. Ordering by play count ensures that
+% repeated execution of the same algorithm always yields diverse playlists.
+schedule_compute(Conf) ->
+	MinGoodPerc   = maps:get(min_good_perc,  Conf),
+	ChaosFactor   = maps:get(chaos_factor,   Conf),
+	InitialFactor = maps:get(initial_factor, Conf),
+	ScheduleLen   = maps:get(schedule_len,   Conf),
+	% unclear why select_count did not return the intended output here?
+	Count1 = length(ets:select(plsongs, schedule_construct_match(0))),
+	Group2 = ets:select(plsongs, schedule_construct_match(20)),
+	Group3 = ets:select(plsongs, schedule_construct_match(40)),
+	Group4 = ets:select(plsongs, schedule_construct_match(60)),
+	Group5 = ets:select(plsongs, schedule_construct_match(80)),
+	Count2 = length(Group2),
+	Count3 = length(Group3),
+	Count4 = length(Group4),
+	Count5 = length(Group5),
+	CountT = Count2 + Count3 + Count4 + Count5,
+	Perce2 = Count2 * 100 / CountT,
+	Perce3 = Count3 * 100 / CountT,
+	Perce4 = Count4 * 100 / CountT,
+	Perce5 = Count5 * 100 / CountT,
+	io:fwrite("Distribution of stars~n 1 Star  ~5w (ignore)~n" ++
+			" 2 Stars ~5w (~5.2f%)~n 3 Stars ~5w (~5.2f%)~n" ++
+			" 4 Stars ~5w (~5.2f%)~n 5 Stars ~5w (~5.2f%)~n",
+			[Count1, Count2, Perce2, Count3, Perce3,
+			Count4, Perce4, Count5, Perce5]),
+	Duplicate = case Perce4 + Perce5 < MinGoodPerc of
+			true  -> trunc(MinGoodPerc / (Perce4 + Perce5));
+			false -> 1
+			end,
+	io:fwrite("Duplicate = ~p~n", [Duplicate]),
+	Schedule = schedule_merge([
+		schedule_shuffle(ChaosFactor, Group5, Duplicate),
+		schedule_shuffle(ChaosFactor, Group4, Duplicate),
+		schedule_shuffle(ChaosFactor, Group3, 1),
+		schedule_shuffle(ChaosFactor, Group2, 1)
+	], ScheduleLen, InitialFactor),
+	io:fwrite("Schedule of ~w songs:~n", [length(Schedule)]),
+	lists:foreach(fun(ID) ->
+			[Entry] = ets:lookup(plsongs, ID),
+			io:fwrite("R~3w C~4w ~s - ~s~n", [Entry#plsong.rating,
+				Entry#plsong.playcount,
+				element(1, Entry#plsong.key),
+				element(3, Entry#plsong.key)])
+		end, Schedule),
+	Schedule.
+
+schedule_construct_match(Rating) ->
+	ets:fun2ms(fun(X) when X#plsong.rating > Rating andalso
+				X#plsong.rating =< (Rating + 20) -> X end).
+
+% https://stackoverflow.com/questions/8817171/shuffling-elements-in-a-list-
+schedule_shuffle(ChaosFactor, Group, Duplicate) ->
+	lists:flatten(lists:map(fun(_Ctr) ->
+		[Y || {_, Y} <- lists:sort([{rand:uniform() * ChaosFactor +
+			S#plsong.playcount, S#plsong.key} || S <- Group])]
+	end, lists:seq(1, Duplicate))).
+
+schedule_merge(Groups, Limit, InitialFactor) ->
+	NonEmptyGroups = lists:filter(fun (X) -> X /= [] end, Groups),
+	schedule_merge_annotated([], Limit, lists:zipwith(fun(Group, ID) ->
+			LGroup = length(Group),
+			% Perc (“0.0”),         ID, Num, Of,     Group
+			{ InitialFactor/LGroup, ID, 0,   LGroup, Group }
+		end, NonEmptyGroups, lists:seq(1, length(NonEmptyGroups)))).
+
+schedule_merge_annotated(Schedule, _Limit, []) ->
+	lists:reverse(Schedule);
+schedule_merge_annotated(Schedule, Limit, _AnnotatedGroups)
+					when length(Schedule) >= Limit ->
+	lists:reverse(Schedule);
+schedule_merge_annotated(Schedule, Limit, AnnotatedGroups) ->
+	{_Perc, SelID, Num, Of, [SelItem|SelRem]} = lists:min(AnnotatedGroups),
+	Others = lists:filter(fun({_Perc2, ID, _Num, _Of, _Group}) ->
+					ID /= SelID end, AnnotatedGroups),
+	NewNum = Num + 1,
+	NewPerc = NewNum / Of,
+	case NewNum < Of of
+	true  -> schedule_merge_annotated([SelItem|Schedule], Limit,
+			[{NewPerc, SelID, NewNum, Of, SelRem}|Others]);
+	false -> schedule_merge_annotated([SelItem|Schedule], Limit, Others)
+	end.
 
 %------------------------------------------------------------[ GMBRC Parsing ]--
 -record(gmbsong, {gmbidx, path, artist, album, title, year, lastplay, playcount,
