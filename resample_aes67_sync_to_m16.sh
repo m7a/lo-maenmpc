@@ -96,21 +96,14 @@ case "$1" in
 	src="$root_src/$2"
 	dst="$root_target/$2"
 	tmpd="/tmp/resample3_$$"
-	tmpf="$tmpd/tmp.flac"
 	mkdir "$tmpd"
 	echo "[ IN  ] $src"
 	find "$src" -maxdepth 1 -type f -name '*.flac' | while read -r line; do
 		if file "$line" | grep -qF "24 bit, stereo, 96 kHz"; then
 			cp "$line" "$tmpd"
 		else
-			ReSampler -i "$line" -o "$tmpf" \
+			ReSampler -i "$line" -o "$tmpd/$(basename "$line")" \
 						-r 96000 -b 24 > /dev/null
-			# https://stackoverflow.com/questions/40699771/batch-
-			# -> restore album art!
-			ffmpeg -nostdin -loglevel error -y -i "$line" \
-				-i "$tmpf" -map 1 -codec copy -map 0:1? \
-				-map_metadata 0 "$tmpd/$(basename "$line")"
-			rm "$tmpf"
 		fi
 	done
 	echo "[  L  ] $dst"
@@ -126,7 +119,6 @@ case "$1" in
 	dst="$root_target/$path"
 	tmpf1="/tmp/resample1_$$.flac"
 	tmpf2="/tmp/resample2_$$.flac"
-	tmpf3="/tmp/resample3_$$.flac"
 	ismp3=0
 	if [ -f "$src" ]; then
 		if file "$src" | grep -qF "24 bit, stereo, 96 kHz"; then
@@ -147,10 +139,7 @@ case "$1" in
 		fi
 		echo "[ RES ] $src"
 		# remove redirect to display more logging
-		ReSampler -i "$src" -o "$tmpf3" -r 96000 -b 24 > /dev/null
-		# copy metadata
-		ffmpeg -nostdin -loglevel error -y -i "$src" -i "$tmpf3" \
-			-map 1 -codec copy -map 0:1? -map_metadata 0 "$tmpf2"
+		ReSampler -i "$src" -o "$tmpf2" -r 96000 -b 24 > /dev/null
 		# file-based replay gain
 		loudgain -q -r -k -s e "$tmpf2" > /dev/null
 		echo "[  CP ] $dst"
@@ -158,6 +147,6 @@ case "$1" in
 	else
 		echo "[ERROR] DELETE FROM TARGET ??? $dst"
 	fi
-	rm "$tmpf1" "$tmpf2" "$tmpf3" 2> /dev/null || true
+	rm "$tmpf1" "$tmpf2" 2> /dev/null || true
 	;;
 esac
