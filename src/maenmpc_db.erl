@@ -11,7 +11,7 @@ init([NotifyToUI]) ->
 	{ok, MPDList}        = application:get_env(maenmpc, mpd),
 	{ok, ALSAHWInfo}     = application:get_env(maenmpc, alsa),
 	% TODO DEBUG ONLY
-	MPDFirst = m16,
+	MPDFirst = local,
 	%[MPDFirst|_Others] = MPDList,
 	% TODO MAY MAKE SENSE TO ALLOW CONFIGURING THIS!
 	timer:send_interval(5000, interrupt_idle),
@@ -151,30 +151,40 @@ query_complete_song_info(Context, DBS) ->
 				ConnI = maps:get(Name, Context#db.mpd_map),
 				% TODO ASTAT EITHER RECEIVE THE REPLY HERE OR SUSPEND THE ENTIRE QUERY OPERATION WITH SOME STATE INFO IN THE CONTEXT AND RESUME IT UPON RECEIVING THE INCOMING IDLES OF THE ITNERRUPTED CONNECTION/S. WE WOULD THEN REDESIGN THIS TO SEND INTERRUPTS AS NECESSARY, SUSPEND UNTIL THE REPLY FROM INTERRUPT COMES AND THEN CONTINUE FINALLY PERFORMING THE ACTUAL CAST OPERATION. WOULD NEED TO REDESIGN THIS THING QUITE A BIT BUT THIS WOULD BE A RELIABLE WAY TO GO ABOUT IT. ALTERNATIVELY PLACE A REAL RECEIVE IN HERE
 				% BTW WE NEED TO FOLLOW THE SUSPEND DESIGN BECAUSE OTHERWISE WE MIGHT RECEIVE SOME MESSAGES THAT WE DIDN'T EXPECT WITH NO REAL WAY TO PROCESS THEM FROM IN HERE EXCEPT BY REPLICATING THE SUSPEND DESIGN JUST THE OTHER WAY AROUND!!!
-				maenmpc_mpd:interrupt(ConnI),
-				timer:sleep(15), % TODO BAD HACK!
-				ConnI
+				case maps:get(Name, Context#db.mpd_map) of
+				offline ->
+					offline;
+				ConnI ->
+					maenmpc_mpd:interrupt(ConnI),
+					timer:sleep(15), % TODO BAD HACK!
+					ConnI
+				end
 			end,
-			% TODO MISSING THE ESCAPE HANDLING!!!
-			%      GOOD CANDIDATE TO INCORPORATE INTO ERLMPD?
-			case erlmpd:find(Conn, io_lib:format("((artist == '~s"
-					++ "') AND (album == '~s"
-					++ "') AND (title == '~s'))",
-					[element(1, DBS#dbsong.key),
-					element(2, DBS#dbsong.key),
-					element(3, DBS#dbsong.key)])) of
-			% nothing assigned
-			[] ->
+			case Conn of
+			offline ->
 				{<<>>, element(Idx, DBS#dbsong.audios)};
-			% Single element found -- assign it!
-			[Element|[]] ->
-				{erlmpd_get_file(Element),
-						erlmpd_get_audio(Element)};
-			% result not unique - cannot safely assign
-			[_Element|_Others] -> 
-				{<<>>, element(Idx, DBS#dbsong.audios)}
-			% else error is fatal because the connection state may
-			% be disrupted.
+			_RealConn ->
+				% TODO MISSING THE ESCAPE HANDLING!!!
+				%      GOOD CANDIDATE TO INCORPORATE INTO ERLMPD?
+				case erlmpd:find(Conn, io_lib:format("((artist == '~s"
+						++ "') AND (album == '~s"
+						++ "') AND (title == '~s'))",
+						[element(1, DBS#dbsong.key),
+						element(2, DBS#dbsong.key),
+						element(3, DBS#dbsong.key)])) of
+				% nothing assigned
+				[] ->
+					{<<>>, element(Idx, DBS#dbsong.audios)};
+				% Single element found -- assign it!
+				[Element|[]] ->
+					{erlmpd_get_file(Element),
+							erlmpd_get_audio(Element)};
+				% result not unique - cannot safely assign
+				[_Element|_Others] -> 
+					{<<>>, element(Idx, DBS#dbsong.audios)}
+				% else error is fatal because the connection state may
+				% be disrupted.
+				end
 			end;
 		AnyURI ->
 			% OK, no need to do anything
@@ -252,6 +262,9 @@ query_alsa(ALSA) ->
 
 handle_cast({mpd_assign, Name, Conn}, Context) ->
 	{noreply, Context#db{mpd_map=maps:put(Name, Conn, Context#db.mpd_map)}};
+handle_cast({mpd_assign_error, Name, Reason}, Context) ->
+	gen_server:cast(Context#db.ui, {db_error, {offline, Name, Reason}}),
+	{noreply, Context};
 handle_cast(_Cast, Context) ->
 	{noreply, Context}.
 

@@ -6,9 +6,13 @@ start(Parent, MPDName, Config) ->
 
 enter(Parent, MPDName, Config) ->
 	{Host, Port} = proplists:get_value(ip, Config),
-	{ok, Conn} = erlmpd:connect(Host, Port),
-	gen_server:cast(Parent, {mpd_assign, MPDName, Conn}),
-	run(Parent, MPDName, Conn).
+	case erlmpd:connect(Host, Port) of
+	{ok, Conn} ->
+		gen_server:cast(Parent, {mpd_assign, MPDName, Conn}),
+		run(Parent, MPDName, Conn);
+	{error, Reason} ->
+		gen_server:cast(Parent, {mpd_assign_error, MPDName, Reason})
+	end.
 
 run(Parent, Name, Conn) ->
 	ok = gen_server:call(Parent, {mpd_idle, Name, erlmpd:idle(Conn,

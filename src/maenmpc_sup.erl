@@ -19,6 +19,7 @@ init([_CLIParams]) ->
 				[{local, maenmpc_db}, maenmpc_db,
 				[maenmpc_ui], []]}}
 	] ++ [#{id => list_to_atom("maenmpc_conn_" ++ atom_to_list(Name)),
+		restart => transient,
 		start => {maenmpc_mpd, start, [maenmpc_db, Name, Config]}} ||
 		{Name, Config} <- MPDList]
 	}}.
