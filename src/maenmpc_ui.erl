@@ -1,8 +1,8 @@
 -module(maenmpc_ui).
 -behavior(gen_server).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
-
 -include_lib("cecho/include/cecho.hrl").
+-include_lib("maenmpc_db.hrl").
 
 -define(CPAIR_DEFAULT,     1).
 -define(CPAIR_DEFAULT_SEL, 2).
@@ -15,7 +15,6 @@
 -record(view, {
 	height, width,
 	wnd_song, wnd_card, wnd_main, wnd_status, wnd_keys,
-	% TODO CIDX SHOULD BE SENT FROM DB SOMEHOW
 	cidx
 }).
 
@@ -57,18 +56,22 @@ init_windows(Ctx0) ->
 
 wnd_static_draw(Ctx) ->
 	% song
+	cecho:werase(Ctx#view.wnd_song),
 	draw_song_border(Ctx),
 	cecho:wrefresh(Ctx#view.wnd_song),
 	% card
+	cecho:werase(Ctx#view.wnd_card),
 	draw_card_border(Ctx),
 	cecho:wrefresh(Ctx#view.wnd_card),
 	% status
+	cecho:werase(Ctx#view.wnd_status),
 	accent(Ctx, Ctx#view.wnd_status, on, std),
 	cecho:wborder(Ctx#view.wnd_status, $ , $ , $-, $ , $-, $-, $ , $ ),
 	accent(Ctx, Ctx#view.wnd_status, off, std),
 	cecho:attron(Ctx#view.wnd_status, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
 	cecho:wrefresh(Ctx#view.wnd_status),
 	% keys
+	cecho:werase(Ctx#view.wnd_keys),
 	lists:foreach(fun({FKey, Msg}) -> 
 		cecho:wmove(Ctx#view.wnd_keys, 0, (FKey - 1) * 8),
 		accent(Ctx, Ctx#view.wnd_keys, on, std),
@@ -88,10 +91,12 @@ wnd_static_draw(Ctx) ->
 
 accent(Ctx, Wnd, OnOff, Sel) ->
 	Atts = case {Ctx#view.cidx, Sel} of
-		{1, std} -> ?ceCOLOR_PAIR(?CPAIR_ACCENT1);
-		{1, sel} -> ?ceCOLOR_PAIR(?CPAIR_ACCENT1_SEL);
-		{2, std} -> ?ceCOLOR_PAIR(?CPAIR_ACCENT2);
-		{2, sel} -> ?ceCOLOR_PAIR(?CPAIR_ACCENT2_SEL)
+		{1,  std} -> ?ceCOLOR_PAIR(?CPAIR_ACCENT1);
+		{1,  sel} -> ?ceCOLOR_PAIR(?CPAIR_ACCENT1_SEL);
+		{2,  std} -> ?ceCOLOR_PAIR(?CPAIR_ACCENT2);
+		{2,  sel} -> ?ceCOLOR_PAIR(?CPAIR_ACCENT2_SEL);
+		{_X, std} -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT);
+		{_Y, sel} -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT_SEL)
 		end,
 	case OnOff of
 	on  -> cecho:attron(Wnd,  Atts);
@@ -121,6 +126,10 @@ handle_cast({getch, Character}, Ctx) ->
 		_Any ->
 			Ctx
 		end};
+handle_cast({db_cidx, CIDX}, Ctx) ->
+	{noreply, wnd_static_draw(Ctx#view{cidx=CIDX})};
+handle_cast({db_error, Info}, Ctx) ->
+	{noreply, display_error(Ctx, io_lib:format("DB error: ~w", [Info]))};
 handle_cast({db_playing, SongAndStatus}, Ctx) ->
 	{noreply, case proplists:get_value(error, SongAndStatus) of
 			undefined -> draw_song_and_status(Ctx, SongAndStatus);
@@ -137,42 +146,38 @@ draw_song_and_status(Ctx, Info) ->
 	cecho:attron(Ctx#view.wnd_song, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
 	{_WH, WW} = cecho:getmaxyx(Ctx#view.wnd_song),
 	PadWidth = WW - 3,
-	% TODO PROBLEM SWITH UNICODE OF COURSE...
+	DBE = proplists:get_value(x_maenmpc, Info),
+	% TODO PROBLEM SWITH UNICODE OF COURSE... BUT COULD BE AN NCURSES ISSUE?
 	cecho:mvwaddstr(Ctx#view.wnd_song, 0, 1, utf8pad(PadWidth,
-		io_lib:format("~s, ~s: ~s",
-		[proplists:get_value('Artist', Info, "(unknown artist)"),
-		 proplists:get_value('Date',   Info, "????"),
-		 proplists:get_value('Album',  Info, "(unknown album)")]))),
-	cecho:mvwaddstr(Ctx#view.wnd_song, 1, 1, utf8pad(PadWidth,
-		io_lib:format("~2..0w - ~s",
-		[proplists:get_value('Track', Info, "??"),
-		 proplists:get_value('Title', Info, "(unknown title)")]))),
+			io_lib:format("~s, ~s: ~s", [element(1, DBE#dbsong.key),
+			DBE#dbsong.year, element(2, DBE#dbsong.key)]))),
+	cecho:mvwaddstr(Ctx#view.wnd_song, 1, 1, utf8pad(PadWidth - 6,
+			io_lib:format("~2..0w - ~s",
+			[DBE#dbsong.trackno, element(3, DBE#dbsong.key)]))),
+	cecho:mvwaddstr(Ctx#view.wnd_song, 1, WW - 7,
+			format_rating(DBE#dbsong.rating)),
 	cecho:mvwaddstr(Ctx#view.wnd_song, 2, 1, progress(PadWidth,
-		floor(proplists:get_value(time, Info)),
-		proplists:get_value('Time', Info))),
+			floor(proplists:get_value(time, Info)),
+			DBE#dbsong.duration)),
 	% -- Status Info --
-	% TODO QUERY SOUNDCARD AND "OTHER ENTRY" INFO FOR BITRATE ETC.
-	%      -> should probably do this within the DB and then pass a
-	%         fully-featured status record here with some additional,
-	%         generated entries....
 	Volume = case proplists:get_value(volume, Info) of
 			undefined -> "Volume n/a";
-			PercVal   -> io_lib:format("Volume ~3..0w%", [PercVal])
+			PercVal   -> io_lib:format("Volume ~3w%", [PercVal])
 		end,
-	BitrateCurrent = case proplists:get_value(audio, Info) of
-			undefined -> "song:      unknown";
-			AudioInfo -> io_lib:format("song:  ~11s", [AudioInfo])
-		end,
-	% TODO WORK WITH COLORS AND ALSO FILL-IN THIS DATA HERE!
-	BitrateOther = "other:     unknown",
-	BitrateCard  = "ALSA:      unknown",
-	% ncmpc/src/TitleBar.cxx
+	BitrateCurrent = io_lib:format("song:  ~11s",
+				[element(Ctx#view.cidx, DBE#dbsong.audios)]),
+	OtherIdx = (Ctx#view.cidx rem tuple_size(DBE#dbsong.audios)) + 1,
+	BitrateOther = io_lib:format("other: ~11s",
+				[element(OtherIdx, DBE#dbsong.audios)]),
+	BitrateCard = io_lib:format("ALSA:  ~11s",
+				[proplists:get_value(x_maenmpc_alsa, Info)]),
 	InfoSymbol = case proplists:get_value(state, Info) of
 		undefined -> "??";
 		play      -> "|>";
 		stop      -> "[]";
 		pause     -> "||"
 		end,
+	% ncmpc/src/TitleBar.cxx
 	InfoChars = io_lib:format("P ~s S ~s~s~s~s~s~s", [InfoSymbol,
 		status_flag(proplists:get_value(repeat,  Info), "r"),
 		status_flag(proplists:get_value(random,  Info), "z"),
@@ -187,7 +192,7 @@ draw_song_and_status(Ctx, Info) ->
 	cecho:mvwaddstr(Ctx#view.wnd_card, 0, 1, BitrateCurrent),
 	cecho:mvwaddstr(Ctx#view.wnd_card, 1, 1, BitrateOther),
 	cecho:mvwaddstr(Ctx#view.wnd_card, 2, 1, BitrateCard),
-	cecho:mvwaddstr(Ctx#view.wnd_card, 0, 21, "MAENMPC"),
+	cecho:mvwaddstr(Ctx#view.wnd_card, 0, 21, "MAENMPC 0.1.0"),
 	cecho:mvwaddstr(Ctx#view.wnd_card, 1, 21, Volume),
 	cecho:mvwaddstr(Ctx#view.wnd_card, 2, 21, InfoChars),
 	cecho:attroff(Ctx#view.wnd_card, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
@@ -213,6 +218,14 @@ progress(PadWidth, Pos, OfTime) ->
 		[lists:duplicate(FillChars, $#),
 		lists:duplicate(BarWidth - FillChars, $_),
 		Pos div 60, Pos rem 60, OfTime div 60, OfTime rem 60]).
+
+format_rating(?RATING_UNRATED) ->
+	"?rate";
+format_rating(?RATING_ERROR) ->
+	"!ERR!";
+format_rating(Rating) ->
+	NumStars = Rating div 20,
+	lists:duplicate(NumStars, $*) ++ lists:duplicate(5 - NumStars, $.).
 
 status_flag(BVal, Flag) ->
 	case BVal of

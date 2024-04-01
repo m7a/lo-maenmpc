@@ -260,6 +260,7 @@ assign_ratings([File|[Sticker|Remainder]]) ->
 		MultipleResults -> io:fwrite("[WARNING] Rating not unique: " ++
 			"~s:~n  ~p. Skipped...~n", [Path, MultipleResults])
 		end,
+	% TODO GENERIC VERSION CAN BE FOUND IN DB sticker_line_to_rating FUNCTION!
 	Rating = lists:foldl(fun(KV, Acc) ->
 			[Key|[Value|[]]] = string:split(KV, "="),
 			case Key == "rating" of
