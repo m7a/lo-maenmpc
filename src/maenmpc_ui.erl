@@ -57,9 +57,7 @@ init_windows(Ctx0) ->
 
 wnd_static_draw(Ctx) ->
 	% song
-	accent(Ctx, Ctx#view.wnd_song, on, std),
-	cecho:wborder(Ctx#view.wnd_song, $ , $|, $ , $-, $ , $|, $-, $+),
-	accent(Ctx, Ctx#view.wnd_song, off, std),
+	draw_song_border(Ctx),
 	cecho:wrefresh(Ctx#view.wnd_song),
 	% card
 	draw_card_border(Ctx),
@@ -105,6 +103,11 @@ draw_card_border(Ctx) ->
 	cecho:wborder(Ctx#view.wnd_card, $ , $ , $ , $-, $ , $ , $-, $-),
 	accent(Ctx, Ctx#view.wnd_card, off, std).
 
+draw_song_border(Ctx) ->
+	accent(Ctx, Ctx#view.wnd_song, on, std),
+	cecho:wborder(Ctx#view.wnd_song, $ , $|, $ , $-, $ , $|, $-, $+),
+	accent(Ctx, Ctx#view.wnd_song, off, std).
+
 handle_call(_Call, _From, Context) ->
 	{reply, ok, Context}.
 
@@ -118,38 +121,45 @@ handle_cast({getch, Character}, Ctx) ->
 		_Any ->
 			Ctx
 		end};
-handle_cast({db_status, Status}, Ctx) ->
-	{noreply, case proplists:get_value(error, Status) of
-			undefined -> draw_status_on_card(Ctx, Status);
+handle_cast({db_playing, SongAndStatus}, Ctx) ->
+	{noreply, case proplists:get_value(error, SongAndStatus) of
+			undefined -> draw_song_and_status(Ctx, SongAndStatus);
 			ErrorInfo -> display_error(Ctx, io_lib:format(
 					"status query error: ~w", [ErrorInfo]))
 		end};
 handle_cast(_Cast, Ctx) ->
 	{noreply, Ctx}.
 
-draw_status_on_card(Ctx, Status) ->
+draw_song_and_status(Ctx, Info) ->
+	% -- Song Info --
+	cecho:werase(Ctx#view.wnd_song),
+	draw_song_border(Ctx),
+	cecho:attron(Ctx#view.wnd_song, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
+	{_WH, WW} = cecho:getmaxyx(Ctx#view.wnd_song),
+	PadWidth = WW - 3,
+	% TODO PROBLEM SWITH UNICODE OF COURSE...
+	cecho:mvwaddstr(Ctx#view.wnd_song, 0, 1, utf8pad(PadWidth,
+		io_lib:format("~s, ~s: ~s",
+		[proplists:get_value('Artist', Info, "(unknown artist)"),
+		 proplists:get_value('Date',   Info, "????"),
+		 proplists:get_value('Album',  Info, "(unknown album)")]))),
+	cecho:mvwaddstr(Ctx#view.wnd_song, 1, 1, utf8pad(PadWidth,
+		io_lib:format("~2..0w - ~s",
+		[proplists:get_value('Track', Info, "??"),
+		 proplists:get_value('Title', Info, "(unknown title)")]))),
+	cecho:mvwaddstr(Ctx#view.wnd_song, 2, 1, progress(PadWidth,
+		floor(proplists:get_value(time, Info)),
+		proplists:get_value('Time', Info))),
+	% -- Status Info --
 	% TODO QUERY SOUNDCARD AND "OTHER ENTRY" INFO FOR BITRATE ETC.
 	%      -> should probably do this within the DB and then pass a
 	%         fully-featured status record here with some additional,
 	%         generated entries....
-	%%   <li>playlistlength: integer: the length of the playlist</li>
-	%%   <li>song: integer: playlist song number of the current song
-	%%       stopped on or playing</li>
-	%%   <li>songid: integer: playlist songid of the current song
-	%%       stopped on or playing </li>
-
-	Volume = case proplists:get_value(volume, Status) of
-			undefined -> "Volume    n/a";
-			PercVal   -> io_lib:format("Volume   ~3w%", [PercVal])
+	Volume = case proplists:get_value(volume, Info) of
+			undefined -> "Volume n/a";
+			PercVal   -> io_lib:format("Volume ~3..0w%", [PercVal])
 		end,
-	% TODO HOW TO GET TOTAL SONG LENGTH INTO THIS HERE?
-	Time = case proplists:get_value(time, Status) of
-			undefined -> "[__:__/__:__]";
-			Elapsed   -> io_lib:format("[~2w:~2w/__:__]",
-					[floor(Elapsed / 60),
-					round(Elapsed) rem 60])
-		end,
-	BitrateCurrent = case proplists:get_value(audio, Status) of
+	BitrateCurrent = case proplists:get_value(audio, Info) of
 			undefined -> "song:      unknown";
 			AudioInfo -> io_lib:format("song:  ~11s", [AudioInfo])
 		end,
@@ -157,19 +167,19 @@ draw_status_on_card(Ctx, Status) ->
 	BitrateOther = "other:     unknown",
 	BitrateCard  = "ALSA:      unknown",
 	% ncmpc/src/TitleBar.cxx
-	InfoSymbol = case proplists:get_value(state, Status) of
+	InfoSymbol = case proplists:get_value(state, Info) of
 		undefined -> "??";
 		play      -> "|>";
 		stop      -> "[]";
 		pause     -> "||"
 		end,
 	InfoChars = io_lib:format("P ~s S ~s~s~s~s~s~s", [InfoSymbol,
-		status_flag(proplists:get_value(repeat, Status), "r"),
-		status_flag(proplists:get_value(random, Status), "z"),
-		status_flag(proplists:get_value(single, Status), "s"),
-		status_flag(proplists:get_value(consume, Status), "c"),
-		status_flag(proplists:get_value(xfade, Status, 0) > 0, "x"),
-		status_flag(proplists:get_value(updating_db, Status)
+		status_flag(proplists:get_value(repeat,  Info), "r"),
+		status_flag(proplists:get_value(random,  Info), "z"),
+		status_flag(proplists:get_value(single,  Info), "s"),
+		status_flag(proplists:get_value(consume, Info), "c"),
+		status_flag(proplists:get_value(xfade,   Info, 0) > 0, "x"),
+		status_flag(proplists:get_value(updating_db, Info)
 							=/= undefined, "U")]),
 	cecho:werase(Ctx#view.wnd_card),
 	draw_card_border(Ctx),
@@ -177,13 +187,32 @@ draw_status_on_card(Ctx, Status) ->
 	cecho:mvwaddstr(Ctx#view.wnd_card, 0, 1, BitrateCurrent),
 	cecho:mvwaddstr(Ctx#view.wnd_card, 1, 1, BitrateOther),
 	cecho:mvwaddstr(Ctx#view.wnd_card, 2, 1, BitrateCard),
-	cecho:mvwaddstr(Ctx#view.wnd_card, 0, 21, Volume),
-	cecho:mvwaddstr(Ctx#view.wnd_card, 1, 21, Time),
+	cecho:mvwaddstr(Ctx#view.wnd_card, 0, 21, "MAENMPC"),
+	cecho:mvwaddstr(Ctx#view.wnd_card, 1, 21, Volume),
 	cecho:mvwaddstr(Ctx#view.wnd_card, 2, 21, InfoChars),
-	% TODO USE LINE FOR FLAGS repeat/random/single/consume/xfade
 	cecho:attroff(Ctx#view.wnd_card, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
+	% -- Refresh and complete --
 	cecho:wrefresh(Ctx#view.wnd_card),
+	cecho:wrefresh(Ctx#view.wnd_song),
 	Ctx.
+
+utf8pad(Pad, Str) ->
+	% TODO ITS NOT HELPING HERE...
+	% Str = unicode:characters_to_nfc_binary(StrRaw), % TODO COPIED FROM CLI NORMALIZATION / REALIGN ONCE CLEAR WHERE ITS CODE IS PUT?
+	SL = string:length(Str),
+	case SL > Pad of
+	true  -> string:slice(Str, 0, Pad);
+	false -> io_lib:format("~s~" ++ integer_to_list(Pad - SL) ++ "s",
+								[Str, ""])
+	end.
+
+progress(PadWidth, Pos, OfTime) ->
+	BarWidth  = PadWidth - 14,
+	FillChars = Pos * BarWidth div OfTime,
+	io_lib:format("~s~s [~2..0w:~2..0w|~2..0w:~2..0w]",
+		[lists:duplicate(FillChars, $#),
+		lists:duplicate(BarWidth - FillChars, $_),
+		Pos div 60, Pos rem 60, OfTime div 60, OfTime rem 60]).
 
 status_flag(BVal, Flag) ->
 	case BVal of
