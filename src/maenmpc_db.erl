@@ -3,15 +3,18 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
 -include_lib("maenmpc_db.hrl").
 
+% tx_type:  none | songinfo | [list] | [radio]
+% tx_await: list of connections to await replys from
+% tx_val:   value (record) under construction
 -record(db, {ui, alsa, mpd_list, mpd_map, mpd_active, mpd_ratings,
-		current_song}).
+		current_song, tx_type, tx_val, tx_await}).
 
 init([NotifyToUI]) ->
 	{ok, PrimaryRatings} = application:get_env(maenmpc, primary_ratings),
 	{ok, MPDList}        = application:get_env(maenmpc, mpd),
 	{ok, ALSAHWInfo}     = application:get_env(maenmpc, alsa),
 	% TODO DEBUG ONLY
-	MPDFirst = local,
+	MPDFirst = m16,
 	%[MPDFirst|_Others] = MPDList,
 	% TODO MAY MAKE SENSE TO ALLOW CONFIGURING THIS!
 	timer:send_interval(5000, interrupt_idle),
@@ -26,26 +29,111 @@ init([NotifyToUI]) ->
 		mpd_list=MPDListIdx,
 		% name -> connection
 		mpd_map=lists:foldl(fun({Name, _ConnInfo}, Map) ->
-			maps:put(Name, offline, Map)
-		end, maps:new(), MPDList),
+				maps:put(Name, offline, Map)
+			end, maps:new(), MPDList),
 		mpd_active=MPDFirst,
 		mpd_ratings=PrimaryRatings,
-		current_song=#dbsong{key={<<>>, <<>>, <<>>}}
+		current_song=#dbsong{key={<<>>, <<>>, <<>>}},
+		tx_type=none,
+		tx_val=undefined,
+		tx_await=[]
 	}}.
 
 handle_call({mpd_idle, Name, Subsystems}, _From, Context) ->
-	{reply, ok, case Name =:= Context#db.mpd_active of
-		true -> case Subsystems =:= [] orelse lists:any(
-				fun is_status_subsystem/1, Subsystems) of
-			true  -> update_playing_info(Context);
-			% TODO DON'T CARE FOR NOW / HANDLE OTHERS HERE
+	{reply, ok, case Context#db.tx_type =/= none andalso
+				lists:member(Name, Context#db.tx_await) of
+		true ->
+			progress_tx(Context, Name);
+			% TODO WHAT IF WE MISS SOME EVENT THIS WAY? WOULD IT MAKE SENSE TO PUSH THE INFO ABOUT THE CHANGES TO SOME STACK DURING TX PROC?
+		false ->
+			% TODO CAN WE EVEN PROCESS HERE OR MUST WE REJECT IT UNTIL
+			%      TX COMPLETE (MUST NOT INTERLEAVE MULTIPLE TX SINCE THERE IS NO STACK???)
+			case Name =:= Context#db.mpd_active of
+			true -> case Subsystems =:= [] orelse lists:any(
+					fun is_status_subsystem/1, Subsystems) of
+				true  -> update_playing_info(Context);
+				% TODO DON'T CARE FOR NOW / HANDLE OTHERS HERE
+				false -> Context
+				end;
 			false -> Context
-			end;
-		% TODO IS IT ALWAYS IRRELEVANT WHEN STATUS OF INACTIVE UPDATES? MAYBE NOT E.G. FOR DB CHANGES ETC
-		false -> Context
+			end
 		end};
 handle_call(_Call, _From, Context) ->
 	{reply, ok, Context}.
+
+progress_tx(Context, Name) ->
+	case Context#db.tx_type of
+	songinfo ->
+		{DBPRE, Status} = Context#db.tx_val,
+		DBPOST = populate_with_conn(Context, Name, DBPRE),
+		case Context#db.tx_await -- [Name] of
+		% finish
+		[] -> send_playing_info(Context#db{current_song=DBPOST,
+			tx_type=none, tx_await=[], tx_val=undefined}, Status);
+		% continue
+		ListRem -> Context#db{tx_await=ListRem, tx_val={DBPOST, Status}}
+		end
+	% TODO OTHERS ARE ERROR FOR NOW
+	end.
+
+populate_with_conn(Context, Name, DBS) ->
+	% TODO MISSING THE ESCAPE HANDLING!!!
+	%      GOOD CANDIDATE TO INCORPORATE INTO ERLMPD?
+	case erlmpd:find(maps:get(Name, Context#db.mpd_map),
+		io_lib:format("((artist == '~s') AND (album == '~s" ++
+		"') AND (title == '~s'))", [element(1, DBS#dbsong.key),
+		element(2, DBS#dbsong.key), element(3, DBS#dbsong.key)])) of
+	% nothing assigned
+	[] ->
+		DBS;
+	% Single element found -- assign it!
+	[Element|[]] ->
+		Idx = proplists:get_value(Name, Context#db.mpd_list),
+		rate_if_match(Context, Name, DBS#dbsong{
+			uris  =setelement(Idx, DBS#dbsong.uris,
+						erlmpd_get_file(Element)),
+			audios=setelement(Idx, DBS#dbsong.audios,
+						erlmpd_get_audio(Element))
+		});
+	% result not unique - cannot safely assign
+	[_Element|_Others] -> 
+		DBS
+	% else error is fatal because the connection state may
+	% be disrupted.
+	end.
+
+rate_if_match(Context, Name, DBCMP) ->
+	case Name =:= Context#db.mpd_ratings of
+	true  -> DBCMP#dbsong{rating=rating_for_uri(Context,
+			element(proplists:get_value(Context#db.mpd_ratings,
+				Context#db.mpd_list), DBCMP#dbsong.uris))};
+	false -> DBCMP
+	end.
+
+rating_for_uri(Context, RatingURI) ->
+	case erlmpd:sticker(maps:get(Context#db.mpd_ratings,
+					Context#db.mpd_map), get, "song",
+					binary_to_list(RatingURI), "rating") of
+	% Typically error just means not found here (OK)
+	{error, _Any} -> ?RATING_UNRATED;
+	ProperRating  -> sticker_line_to_rating(ProperRating)
+	end.
+
+% TODO USE FOR RADIO MODE, TOO!
+sticker_line_to_rating(Sticker) ->
+	[_ConstSticker|[Stickers|[]]] = string:split(Sticker, ": "),
+	lists:foldl(fun(KV, Acc) ->
+		[Key|[Value|[]]] = string:split(KV, "="),
+		case Key == "rating" of
+		% Found rating, compute * 10 with 10 map to 0.
+		true -> case list_to_integer(Value) of
+			1      -> 0;
+			NotOne -> NotOne * 10
+			end;
+		% Skip this sticker
+		false -> Acc
+		end
+	end, ?RATING_UNRATED, string:split(Stickers, " ")).
 
 is_status_subsystem(player)  -> true;  % start stop seek new song, tags changed
 is_status_subsystem(mixer)   -> true;  % the volume has been changed
@@ -61,11 +149,29 @@ update_playing_info(Context) ->
 	Status = erlmpd:status(Conn),
 	% populate from DB
 	DBCMP = erlmpd_to_dbsong(Context, CurrentSong),
-	RCtx = case DBCMP#dbsong.key =:= Context#db.current_song#dbsong.key of
-		true  -> Context;
-		false -> Context#db{current_song=query_complete_song_info(
-							Context, DBCMP)}
-		end,
+	case DBCMP#dbsong.key =:= Context#db.current_song#dbsong.key of
+	true ->
+		send_playing_info(Context, Status);
+	false -> 
+		DBINS = rate_if_match(Context, Context#db.mpd_active, DBCMP),
+		TXAwait = lists:filter(fun(Name) ->
+				Name =/= Context#db.mpd_active andalso
+				maps:get(Name, Context#db.mpd_map) =/= offline
+			end, maps:keys(Context#db.mpd_map)),
+		case TXAwait of
+		[] ->
+			send_playing_info(Context#db{current_song=DBINS},
+									Status);
+		_NonEmpty ->
+			lists:foreach(fun(Name) -> maenmpc_mpd:interrupt(
+					maps:get(Name, Context#db.mpd_map)) end,
+					TXAwait),
+			Context#db{tx_type=songinfo, tx_val={DBINS, Status},
+					tx_await=TXAwait}
+		end
+	end.
+
+send_playing_info(RCtx, Status) ->
 	gen_server:cast(RCtx#db.ui, {db_playing, [
 			{x_maenmpc, RCtx#db.current_song}|[
 			{x_maenmpc_alsa, query_alsa(RCtx#db.alsa)}|Status]]}),
@@ -122,105 +228,6 @@ erlmpd_get_file(Entry) ->
 
 erlmpd_get_audio(Entry) ->
 	proplists:get_value('Format', Entry, <<>>).
-
-query_complete_song_info(Context, DBS) ->
-	% Assoc Status, URIs, Audios
-	{URIs, Audios} = lists:unzip([case element(Idx, DBS#dbsong.uris) of
-		<<>> ->
-			% unassigned, must do something
-			% TODO THIS ROUTINE HERE IS SPECIFIC TO THE GENERAL SONG INFO CASE. OTHER CASES (LIST PROCESSING) MAY REQUIRE ENTIRELY DIFFERENT HANDLING!
-			Conn = case Name =:= Context#db.mpd_active of
-			true ->
-				% missing info about the active one, can query
-				% right away since we are running in "active"
-				% callback
-				% TODO THIS MAY NOT BE THE CORRECT INFO IN RADIO CASE!
-				get_active_connection(Context);
-			false ->
-				% missing info about an other one, must
-				% interrupt the ongoing idle. note that
-				% afterwards, a callback message is issued to
-				% maenmpc_db, but we do not use this and rather
-				% make use of the fact that the queue is not
-				% processed while we are inside this function
-				% here and hence idle is suspended here already!
-				% TODO IT IS NOT CLEAR IF THIS REALLY WORKS
-				%      RELIABLY. POSSIBLY SWITCH TO DESIGN WITH
-				%      IDLE CALLBACK ALTHOUGH IT MAY BE MUCH
-				%      MORE DIFFICULT IN PRACTICE...
-				ConnI = maps:get(Name, Context#db.mpd_map),
-				% TODO ASTAT EITHER RECEIVE THE REPLY HERE OR SUSPEND THE ENTIRE QUERY OPERATION WITH SOME STATE INFO IN THE CONTEXT AND RESUME IT UPON RECEIVING THE INCOMING IDLES OF THE ITNERRUPTED CONNECTION/S. WE WOULD THEN REDESIGN THIS TO SEND INTERRUPTS AS NECESSARY, SUSPEND UNTIL THE REPLY FROM INTERRUPT COMES AND THEN CONTINUE FINALLY PERFORMING THE ACTUAL CAST OPERATION. WOULD NEED TO REDESIGN THIS THING QUITE A BIT BUT THIS WOULD BE A RELIABLE WAY TO GO ABOUT IT. ALTERNATIVELY PLACE A REAL RECEIVE IN HERE
-				% BTW WE NEED TO FOLLOW THE SUSPEND DESIGN BECAUSE OTHERWISE WE MIGHT RECEIVE SOME MESSAGES THAT WE DIDN'T EXPECT WITH NO REAL WAY TO PROCESS THEM FROM IN HERE EXCEPT BY REPLICATING THE SUSPEND DESIGN JUST THE OTHER WAY AROUND!!!
-				case maps:get(Name, Context#db.mpd_map) of
-				offline ->
-					offline;
-				ConnI ->
-					maenmpc_mpd:interrupt(ConnI),
-					timer:sleep(15), % TODO BAD HACK!
-					ConnI
-				end
-			end,
-			case Conn of
-			offline ->
-				{<<>>, element(Idx, DBS#dbsong.audios)};
-			_RealConn ->
-				% TODO MISSING THE ESCAPE HANDLING!!!
-				%      GOOD CANDIDATE TO INCORPORATE INTO ERLMPD?
-				case erlmpd:find(Conn, io_lib:format("((artist == '~s"
-						++ "') AND (album == '~s"
-						++ "') AND (title == '~s'))",
-						[element(1, DBS#dbsong.key),
-						element(2, DBS#dbsong.key),
-						element(3, DBS#dbsong.key)])) of
-				% nothing assigned
-				[] ->
-					{<<>>, element(Idx, DBS#dbsong.audios)};
-				% Single element found -- assign it!
-				[Element|[]] ->
-					{erlmpd_get_file(Element),
-							erlmpd_get_audio(Element)};
-				% result not unique - cannot safely assign
-				[_Element|_Others] -> 
-					{<<>>, element(Idx, DBS#dbsong.audios)}
-				% else error is fatal because the connection state may
-				% be disrupted.
-				end
-			end;
-		AnyURI ->
-			% OK, no need to do anything
-			{AnyURI, element(Idx, DBS#dbsong.audios)}
-		end || {Name, Idx} <- Context#db.mpd_list]),
-	URIsConv = list_to_tuple(URIs),
-	RatingIdx = proplists:get_value(Context#db.mpd_ratings,
-							Context#db.mpd_list),
-	Rating = case element(RatingIdx, URIsConv) of
-		<<>>      -> ?RATING_ERROR;
-		RatingURI ->
-			case erlmpd:sticker(maps:get(Context#db.mpd_ratings,
-					Context#db.mpd_map), get, "song",
-					binary_to_list(RatingURI), "rating") of
-			% Typically error just means not found here (OK)
-			{error, _Any} -> ?RATING_UNRATED;
-			ProperRating  -> sticker_line_to_rating(ProperRating)
-			end
-		end,
-	DBS#dbsong{uris=URIsConv, rating=Rating, audios=list_to_tuple(Audios)}.
-
-% TODO USE FOR RADIO MODE, TOO!
-sticker_line_to_rating(Sticker) ->
-	[_ConstSticker|[Stickers|[]]] = string:split(Sticker, ": "),
-	lists:foldl(fun(KV, Acc) ->
-		[Key|[Value|[]]] = string:split(KV, "="),
-		case Key == "rating" of
-		% Found rating, compute * 10 with 10 map to 0.
-		true -> case list_to_integer(Value) of
-			1      -> 0;
-			NotOne -> NotOne * 10
-			end;
-		% Skip this sticker
-		false -> Acc
-		end
-	end, ?RATING_UNRATED, string:split(Stickers, " ")).
 
 % $ cat /proc/asound/card0/pcm0p/sub0/hw_params
 % closed
