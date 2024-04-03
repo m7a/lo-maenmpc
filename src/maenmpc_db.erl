@@ -77,12 +77,10 @@ progress_tx(Context, Name) ->
 	end.
 
 populate_with_conn(Context, Name, DBS) ->
-	% TODO MISSING THE ESCAPE HANDLING!!!
-	%      GOOD CANDIDATE TO INCORPORATE INTO ERLMPD?
-	case erlmpd:find(maps:get(Name, Context#db.mpd_map),
-		io_lib:format("((artist == '~s') AND (album == '~s" ++
-		"') AND (title == '~s'))", [element(1, DBS#dbsong.key),
-		element(2, DBS#dbsong.key), element(3, DBS#dbsong.key)])) of
+	case erlmpd:find(maps:get(Name, Context#db.mpd_map), erlmpd:ex_parse(
+		{land, [{tagop, "artist", eq, element(1, DBS#dbsong.key)},
+			{tagop, "album",  eq, element(2, DBS#dbsong.key)},
+			{tagop, "title",  eq, element(3, DBS#dbsong.key)}]})) of
 	% nothing assigned
 	[] ->
 		DBS;
