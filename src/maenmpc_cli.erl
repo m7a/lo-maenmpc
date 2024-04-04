@@ -125,7 +125,7 @@ radio(MPDList, PrimaryRatings, Maloja, UseMPD, RadioConf) ->
 
 	io:fwrite("[ INFO  ] associate ratings~n"),
 	ConnRatings = erlmpd_connect(PrimaryRatings, MPDList),
-	RatingsRaw = erlmpd:sticker(ConnRatings, find, "song", "", "rating"),
+	RatingsRaw = erlmpd:sticker_find(ConnRatings, "song", "", "rating"),
 	erlmpd:disconnect(ConnRatings),
 	assign_ratings(RatingsRaw),
 
@@ -246,12 +246,11 @@ plsongs_inc(Key) ->
 	ets:update_counter(plsongs, Key, {#plsong.playcount, 1}),
 	1.
 
+% TODO x RECURSIVE PURLY FOR HISTORICAL REASONS
 assign_ratings([]) ->
 	ok;
-assign_ratings([File|[Sticker|Remainder]]) ->
-	[_ConstFile|[PathRaw|[]]] = string:split(File, ": "),
-	[_ConstSticker|[Stickers|[]]] = string:split(Sticker, ": "),
-	Path = normalize_always(PathRaw),
+assign_ratings([Entry|Rem]) ->
+	Path = normalize_always(proplists:get_value(file, Entry)),
 	DBKey = case ets:select(plsongs, ets:fun2ms(fun(X) when
 				X#plsong.rating_uri == Path -> X#plsong.key
 			end)) of
@@ -260,27 +259,18 @@ assign_ratings([File|[Sticker|Remainder]]) ->
 		MultipleResults -> io:fwrite("[WARNING] Rating not unique: " ++
 			"~s:~n  ~p. Skipped...~n", [Path, MultipleResults])
 		end,
-	% TODO GENERIC VERSION CAN BE FOUND IN DB sticker_line_to_rating FUNCTION!
-	Rating = lists:foldl(fun(KV, Acc) ->
-			[Key|[Value|[]]] = string:split(KV, "="),
-			case Key == "rating" of
-			true ->
-				% Found rating, compute * 10 with 10 map to 0.
-				case list_to_integer(Value) of
-				1      -> 0;
-				NotOne -> NotOne * 10
-				end;
-			% Skip this sticker
-			false -> Acc
-			end
-		end, nothing, string:split(Stickers, " ")),
+	Rating = case proplists:get_value(rating, Entry, nothing) of
+		nothing -> nothing;
+		<<"1">> -> 0;
+		NotOne  -> binary_to_integer(NotOne) * 10
+		end,
 	case {DBKey, Rating} of
 	{ok,       _AnyRating}  -> skip;
 	{_AnyKey,  nothing}     -> skip;
 	{_GoodKey, _GoodRating} -> ets:update_element(plsongs, DBKey,
 						{#plsong.rating, Rating})
 	end,
-	assign_ratings(Remainder).
+	assign_ratings(Rem).
 
 radio_play(ConnUse, RadioConf) ->
 	io:fwrite("[ INFO  ] Compute schedule...~n"),
@@ -519,7 +509,7 @@ import_ratings_to_stickers(MPDList, PrimaryRatings) ->
 						Song#gmbsong.rating / 10),
 						[{decimals, 0}]),
 				io:fwrite("ASSIGN ~s = ~s~n", [UseKey, Rating]),
-				ok = erlmpd:sticker(Conn, set, "song", UseKey,
+				ok = erlmpd:sticker_set(Conn, "song", UseKey,
 							"rating", Rating);
 			false ->
 				io:fwrite("ERROR Prefix mismatch for ~s: " ++

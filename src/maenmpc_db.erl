@@ -109,29 +109,16 @@ rate_if_match(Context, Name, DBCMP) ->
 	end.
 
 rating_for_uri(Context, RatingURI) ->
-	case erlmpd:sticker(maps:get(Context#db.mpd_ratings,
-					Context#db.mpd_map), get, "song",
-					binary_to_list(RatingURI), "rating") of
+	case erlmpd:sticker_get(maps:get(Context#db.mpd_ratings,
+				Context#db.mpd_map), "song",
+				binary_to_list(RatingURI), "rating") of
 	% Typically error just means not found here (OK)
 	{error, _Any} -> ?RATING_UNRATED;
-	ProperRating  -> sticker_line_to_rating(ProperRating)
+	ProperRating  -> case list_to_integer(ProperRating) of
+			 1      -> 0;
+			 NotOne -> NotOne * 10
+			 end
 	end.
-
-% TODO USE FOR RADIO MODE, TOO!
-sticker_line_to_rating(Sticker) ->
-	[_ConstSticker|[Stickers|[]]] = string:split(Sticker, ": "),
-	lists:foldl(fun(KV, Acc) ->
-		[Key|[Value|[]]] = string:split(KV, "="),
-		case Key == "rating" of
-		% Found rating, compute * 10 with 10 map to 0.
-		true -> case list_to_integer(Value) of
-			1      -> 0;
-			NotOne -> NotOne * 10
-			end;
-		% Skip this sticker
-		false -> Acc
-		end
-	end, ?RATING_UNRATED, string:split(Stickers, " ")).
 
 is_status_subsystem(player)  -> true;  % start stop seek new song, tags changed
 is_status_subsystem(mixer)   -> true;  % the volume has been changed
