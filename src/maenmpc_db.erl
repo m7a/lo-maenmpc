@@ -77,10 +77,10 @@ progress_tx(Context, Name) ->
 	end.
 
 populate_with_conn(Context, Name, DBS) ->
-	case erlmpd:find(maps:get(Name, Context#db.mpd_map), erlmpd:ex_parse(
-		{land, [{tagop, "artist", eq, element(1, DBS#dbsong.key)},
-			{tagop, "album",  eq, element(2, DBS#dbsong.key)},
-			{tagop, "title",  eq, element(3, DBS#dbsong.key)}]})) of
+	case erlmpd:find(maps:get(Name, Context#db.mpd_map), {land, [
+			{tagop, artist, eq, element(1, DBS#dbsong.key)},
+			{tagop, album,  eq, element(2, DBS#dbsong.key)},
+			{tagop, title,  eq, element(3, DBS#dbsong.key)}]}) of
 	% nothing assigned
 	[] ->
 		DBS;

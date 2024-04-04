@@ -160,7 +160,7 @@ erlmpd_connect(MPDName, MPDList) ->
 
 % Query all data (modified-since '0') or (base '')
 erlmpd_find_all(Conn) ->
-	erlmpd:find(Conn, "(base '')").
+	erlmpd:find(Conn, {base, <<>>}).
 
 erlmpd_to_plsong(Entry, DefaultRating) ->
 	#plsong{key=erlmpd_to_key(Entry),
@@ -545,10 +545,10 @@ extract_root(Conn, Song) ->
 	PathGMB = filename:rootname(Song#gmbsong.path),
 	% by enforcing ASCII subset we need not quote inside the matching
 	% expression!
-	[Result] = erlmpd:find(Conn, io_lib:format("((artist == '~s') "
-				++ "AND (album == '~s') AND (title == '~s'))",
-				[Song#gmbsong.artist, Song#gmbsong.album,
-				Song#gmbsong.title])),
+	[Result] = erlmpd:find(Conn, {land, [
+				{tagop, artist, eq, Song#gmbsong.artist},
+				{tagop, album,  eq, Song#gmbsong.album},
+				{tagop, title,  eq, Song#gmbsong.title}]}),
 	PathMPD   = filename:rootname(proplists:get_value(file, Result)),
 	SuffixLen = binary:longest_common_suffix([PathGMB, PathMPD]),
 	case SuffixLen == byte_size(PathMPD) of
