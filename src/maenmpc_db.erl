@@ -14,7 +14,7 @@ init([NotifyToUI]) ->
 	{ok, MPDList}        = application:get_env(maenmpc, mpd),
 	{ok, ALSAHWInfo}     = application:get_env(maenmpc, alsa),
 	% TODO DEBUG ONLY
-	MPDFirst = m16,
+	MPDFirst = local,
 	%[MPDFirst|_Others] = MPDList,
 	% TODO MAY MAKE SENSE TO ALLOW CONFIGURING THIS!
 	timer:send_interval(5000, interrupt_idle),
@@ -94,7 +94,7 @@ populate_with_conn(Context, Name, DBS) ->
 						erlmpd_get_audio(Element))
 		});
 	% result not unique - cannot safely assign
-	[_Element|_Others] -> 
+	[_Element|_Others] ->
 		DBS
 	% else error is fatal because the connection state may
 	% be disrupted.
@@ -127,34 +127,48 @@ is_status_subsystem(_Other)  -> false.
 
 update_playing_info(Context) ->
 	Conn = get_active_connection(Context),
-	% file [uri], Artist, Date, Album, Track, Title, Time [duration],
-	CurrentSong = erlmpd:currentsong(Conn),
 	% state, audio, volume, repeat, random, single, consume, xfade,
 	% updating_db, time
 	Status = erlmpd:status(Conn),
+	% file [uri], Artist, Date, Album, Track, Title, Time [duration],
+	CurrentSong = erlmpd:currentsong(Conn),
+	case proplists:get_value(file, CurrentSong) of
+	% Playback has stopped!
+	undefined -> send_playing_info(Context#db{
+				current_song=epsilon_song(Context)}, Status);
 	% populate from DB
-	DBCMP = erlmpd_to_dbsong(Context, CurrentSong),
-	case DBCMP#dbsong.key =:= Context#db.current_song#dbsong.key of
-	true ->
-		send_playing_info(Context, Status);
-	false -> 
-		DBINS = rate_if_match(Context, Context#db.mpd_active, DBCMP),
-		TXAwait = lists:filter(fun(Name) ->
-				Name =/= Context#db.mpd_active andalso
-				maps:get(Name, Context#db.mpd_map) =/= offline
-			end, maps:keys(Context#db.mpd_map)),
-		case TXAwait of
-		[] ->
-			send_playing_info(Context#db{current_song=DBINS},
-									Status);
-		_NonEmpty ->
-			lists:foreach(fun(Name) -> maenmpc_mpd:interrupt(
-					maps:get(Name, Context#db.mpd_map)) end,
-					TXAwait),
-			Context#db{tx_type=songinfo, tx_val={DBINS, Status},
-					tx_await=TXAwait}
+	_ValidValue ->
+		DBCMP = erlmpd_to_dbsong(Context, CurrentSong),
+		case DBCMP#dbsong.key =:= Context#db.current_song#dbsong.key of
+		true ->
+			send_playing_info(Context, Status);
+		false ->
+			DBINS = rate_if_match(Context, Context#db.mpd_active,
+									DBCMP),
+			TXAwait = lists:filter(fun(Name) ->
+					Name =/= Context#db.mpd_active andalso
+					maps:get(Name, Context#db.mpd_map) =/=
+									offline
+				end, maps:keys(Context#db.mpd_map)),
+			case TXAwait of
+			[] ->
+				send_playing_info(
+					Context#db{current_song=DBINS}, Status);
+			_NonEmpty ->
+				lists:foreach(fun(Name) ->
+					maenmpc_mpd:interrupt(maps:get(Name,
+					Context#db.mpd_map)) end, TXAwait),
+				Context#db{tx_type=songinfo, tx_val={DBINS,
+					Status}, tx_await=TXAwait}
+			end
 		end
 	end.
+
+epsilon_song(Context) ->
+	EpsTPL = list_to_tuple(lists:duplicate(length(Context#db.mpd_list),
+									<<>>)),
+	#dbsong{key={<<>>, <<>>, <<>>}, uris=EpsTPL, playcount=0, rating=0,
+			duration=1, year = <<>>, trackno=0, audios=EpsTPL}.
 
 send_playing_info(RCtx, Status) ->
 	gen_server:cast(RCtx#db.ui, {db_playing, [

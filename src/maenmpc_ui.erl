@@ -72,7 +72,7 @@ wnd_static_draw(Ctx) ->
 	cecho:wrefresh(Ctx#view.wnd_status),
 	% keys
 	cecho:werase(Ctx#view.wnd_keys),
-	lists:foreach(fun({FKey, Msg}) -> 
+	lists:foreach(fun({FKey, Msg}) ->
 		cecho:wmove(Ctx#view.wnd_keys, 0, (FKey - 1) * 8),
 		accent(Ctx, Ctx#view.wnd_keys, on, std),
 		cecho:waddstr(Ctx#view.wnd_keys, io_lib:format("~2w", [FKey])),
@@ -147,7 +147,6 @@ draw_song_and_status(Ctx, Info) ->
 	{_WH, WW} = cecho:getmaxyx(Ctx#view.wnd_song),
 	PadWidth = WW - 3,
 	DBE = proplists:get_value(x_maenmpc, Info),
-	% TODO PROBLEM SWITH UNICODE OF COURSE... BUT COULD BE AN NCURSES ISSUE?
 	cecho:mvwaddstr(Ctx#view.wnd_song, 0, 1, utf8pad(PadWidth,
 			io_lib:format("~s, ~s: ~s", [element(1, DBE#dbsong.key),
 			DBE#dbsong.year, element(2, DBE#dbsong.key)]))),
@@ -157,7 +156,7 @@ draw_song_and_status(Ctx, Info) ->
 	cecho:mvwaddstr(Ctx#view.wnd_song, 1, WW - 7,
 			format_rating(DBE#dbsong.rating)),
 	cecho:mvwaddstr(Ctx#view.wnd_song, 2, 1, progress(PadWidth,
-			floor(proplists:get_value(time, Info)),
+			floor(proplists:get_value(time, Info, 0)),
 			DBE#dbsong.duration)),
 	% -- Status Info --
 	Volume = case proplists:get_value(volume, Info) of
@@ -202,8 +201,6 @@ draw_song_and_status(Ctx, Info) ->
 	Ctx.
 
 utf8pad(Pad, Str) ->
-	% TODO ITS NOT HELPING HERE...
-	% Str = unicode:characters_to_nfc_binary(StrRaw), % TODO COPIED FROM CLI NORMALIZATION / REALIGN ONCE CLEAR WHERE ITS CODE IS PUT?
 	SL = string:length(Str),
 	case SL > Pad of
 	true  -> string:slice(Str, 0, Pad);
