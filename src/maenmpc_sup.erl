@@ -12,7 +12,8 @@ init([_CLIParams]) ->
 	{ok, {#{strategy => one_for_all, intensity => 0, period => 1}, [
 		% TODO CHILD SPECS GO HERE
 		#{id => maenmpc_ui, start => {gen_server, start_link,
-				[{local, maenmpc_ui}, maenmpc_ui, [], []]}},
+				[{local, maenmpc_ui}, maenmpc_ui, [maenmpc_db],
+				[]]}},
 		#{id => maenmpc_input, start => {maenmpc_input, start,
 				[maenmpc_ui]}},
 		#{id => maenmpc_db, start => {gen_server, start_link,

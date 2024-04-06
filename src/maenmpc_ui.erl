@@ -15,17 +15,18 @@
 -record(view, {
 	height, width,
 	wnd_song, wnd_card, wnd_main, wnd_status, wnd_keys,
-	cidx
+	db, cidx
 }).
 
-init([]) ->
+init([NotifyToDB]) ->
 	cecho:start_color(),
 	init_color_pairs(),
 	cecho:cbreak(),
 	cecho:noecho(),
 	cecho:keypad(?ceSTDSCR, true),
 	{Height, Width} = cecho:getmaxyx(),
-	{ok, init_windows(#view{height = Height, width = Width, cidx = 1})}.
+	{ok, init_windows(#view{height = Height, width = Width,
+						db = NotifyToDB, cidx = 1})}.
 
 init_color_pairs() ->
 	cecho:init_pair(?CPAIR_DEFAULT,     ?ceCOLOR_WHITE,  ?ceCOLOR_BLACK),
@@ -118,6 +119,12 @@ handle_call(_Call, _From, Context) ->
 
 handle_cast({getch, Character}, Ctx) ->
 	{noreply, case Character of
+		?ceKEY_LEFT ->
+			gen_server:cast(Ctx#view.db, {ui_volume_change, -1}),
+			Ctx;
+		?ceKEY_RIGHT ->
+			gen_server:cast(Ctx#view.db, {ui_volume_change, +1}),
+			Ctx;
 		%?ceKEY_F(2) ->
 		%	page_new_start(Context);
 		?ceKEY_F(10) ->
@@ -161,6 +168,7 @@ draw_song_and_status(Ctx, Info) ->
 	% -- Status Info --
 	Volume = case proplists:get_value(volume, Info) of
 			undefined -> "Volume n/a";
+			-1        -> "Volume n/a";
 			PercVal   -> io_lib:format("Volume ~3w%", [PercVal])
 		end,
 	BitrateCurrent = io_lib:format("song:  ~11s",

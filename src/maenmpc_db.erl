@@ -7,14 +7,14 @@
 % tx_await: list of connections to await replys from
 % tx_val:   value (record) under construction
 -record(db, {ui, alsa, mpd_list, mpd_map, mpd_active, mpd_ratings,
-		current_song, tx_type, tx_val, tx_await}).
+		mpd_volume, current_song, tx_type, tx_val, tx_await}).
 
 init([NotifyToUI]) ->
 	{ok, PrimaryRatings} = application:get_env(maenmpc, primary_ratings),
 	{ok, MPDList}        = application:get_env(maenmpc, mpd),
 	{ok, ALSAHWInfo}     = application:get_env(maenmpc, alsa),
 	% TODO DEBUG ONLY
-	MPDFirst = local,
+	MPDFirst = m16,
 	%[MPDFirst|_Others] = MPDList,
 	% TODO MAY MAKE SENSE TO ALLOW CONFIGURING THIS!
 	timer:send_interval(5000, interrupt_idle),
@@ -33,6 +33,7 @@ init([NotifyToUI]) ->
 			end, maps:new(), MPDList),
 		mpd_active=MPDFirst,
 		mpd_ratings=PrimaryRatings,
+		mpd_volume=-1,
 		current_song=#dbsong{key={<<>>, <<>>, <<>>}},
 		tx_type=none,
 		tx_val=undefined,
@@ -44,10 +45,9 @@ handle_call({mpd_idle, Name, Subsystems}, _From, Context) ->
 				lists:member(Name, Context#db.tx_await) of
 		true ->
 			progress_tx(Context, Name);
-			% TODO WHAT IF WE MISS SOME EVENT THIS WAY? WOULD IT MAKE SENSE TO PUSH THE INFO ABOUT THE CHANGES TO SOME STACK DURING TX PROC?
+			% TODO TX WHAT IF WE MISS SOME EVENT THIS WAY? WOULD IT MAKE SENSE TO PUSH THE INFO ABOUT THE CHANGES TO SOME STACK DURING TX PROC?
 		false ->
-			% TODO CAN WE EVEN PROCESS HERE OR MUST WE REJECT IT UNTIL
-			%      TX COMPLETE (MUST NOT INTERLEAVE MULTIPLE TX SINCE THERE IS NO STACK???)
+			% TODO TX CAN WE EVEN PROCESS HERE OR MUST WE REJECT IT UNTIL TX COMPLETE (MUST NOT INTERLEAVE MULTIPLE TX SINCE THERE IS NO STACK???)
 			case Name =:= Context#db.mpd_active of
 			true -> case Subsystems =:= [] orelse lists:any(
 					fun is_status_subsystem/1, Subsystems) of
@@ -72,7 +72,16 @@ progress_tx(Context, Name) ->
 			tx_type=none, tx_await=[], tx_val=undefined}, Status);
 		% continue
 		ListRem -> Context#db{tx_await=ListRem, tx_val={DBPOST, Status}}
-		end
+		end;
+	ui_volume_change ->
+		Conn = maps:get(Name, Context#db.mpd_map),
+		NewVal = Context#db.mpd_volume + Context#db.tx_val,
+		case Context#db.mpd_volume /= -1 andalso
+					 NewVal >= 0 andalso NewVal =< 100 of
+		true  -> erlmpd:setvol(Conn, NewVal);
+		false -> ok_pass
+		end,
+		Context#db{tx_type=none, tx_await=[], tx_val=undefined}
 	% TODO OTHERS ARE ERROR FOR NOW
 	end.
 
@@ -174,7 +183,7 @@ send_playing_info(RCtx, Status) ->
 	gen_server:cast(RCtx#db.ui, {db_playing, [
 			{x_maenmpc, RCtx#db.current_song}|[
 			{x_maenmpc_alsa, query_alsa(RCtx#db.alsa)}|Status]]}),
-	RCtx.
+	RCtx#db{mpd_volume = proplists:get_value(volume, Status, -1)}.
 
 get_active_connection(Context) ->
 	maps:get(Context#db.mpd_active, Context#db.mpd_map).
@@ -266,6 +275,12 @@ query_alsa(ALSA) ->
 %	% the sticker database has been modified.
 %	Context; % TODO
 
+handle_cast({ui_volume_change, Delta}, Context) ->
+	% TODO TX PROBLEM IF TX ALREADY ONGOING THEN IT CRASHES WITH EALREADY!!
+	maenmpc_mpd:interrupt(get_active_connection(Context)),
+	% TODO TX SMALL PROBLEM WHAT IF THERE IS AN ONGOING TX? -> NEED TO DESIGN THAT IN, IN THE MEANTIME TEST USING THIS CHAOTIC VARIANT HERE...
+	{noreply, Context#db{tx_type=ui_volume_change, tx_val=Delta,
+					tx_await=[Context#db.mpd_active]}};
 handle_cast({mpd_assign, Name, Conn}, Context) ->
 	{noreply, Context#db{mpd_map=maps:put(Name, Conn, Context#db.mpd_map)}};
 handle_cast({mpd_assign_error, Name, Reason}, Context) ->
