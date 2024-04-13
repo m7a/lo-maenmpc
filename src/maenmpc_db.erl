@@ -261,20 +261,6 @@ query_alsa(ALSA) ->
 		[Rate, <<":__:">>, Chan]
 	end.
 
-%handle_idle(database, Context, _Name) ->
-%	% the song database has been modified after update
-%	Context; % TODO
-%handle_idle(playlist, Context, _Name) ->
-%	% the queue (i.e. the current playlist) has been modified
-%	Context; % TODO
-%handle_idle(output, Context) ->
-%	% an audio output has been added, removed or modified
-%	% (e.g. renamed, enabled or disabled)
-%	Context; % TODO
-%handle_idle(sticker, Context) ->
-%	% the sticker database has been modified.
-%	Context; % TODO
-
 handle_cast({ui_volume_change, Delta}, Context) ->
 	% TODO TX PROBLEM IF TX ALREADY ONGOING THEN IT CRASHES WITH EALREADY!!
 	maenmpc_mpd:interrupt(get_active_connection(Context)),

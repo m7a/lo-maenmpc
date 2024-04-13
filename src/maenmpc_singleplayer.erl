@@ -19,13 +19,27 @@ epsilon_song(Ctx) ->
 	#dbsong{key={<<>>, <<>>, <<>>}, uris=EpsTPL, playcount=0, rating=0,
 			duration=1, year = <<>>, trackno=0, audios=EpsTPL}.
 
-% TODO ALLOW QUERY STATUS wrt. online etc.?
+% TODO CASE database, playlist, output, sticker?
+%handle_idle(database, Context, _Name) ->
+%	% the song database has been modified after update
+%	Context; % TODO
+%handle_idle(playlist, Context, _Name) ->
+%	% the queue (i.e. the current playlist) has been modified
+%	Context; % TODO
+%handle_idle(output, Context) ->
+%	% an audio output has been added, removed or modified
+%	% (e.g. renamed, enabled or disabled)
+%	Context; % TODO
+%handle_idle(sticker, Context) ->
+%	% the sticker database has been modified.
+%	Context; % TODO
 
-handle_call({mpd_idle, _Name, Subsystems, Conn}, _From, Ctx) ->
-	{reply, ok, case lists:any(fun is_status_subsystem/1, Subsystems) of
-	true  -> update_playing_info(Conn, Ctx);
-	false -> Ctx
-	end};
+handle_call(is_online, _From, Ctx) ->
+	{reply, maenmpc_sync_idle:is_online(Ctx#spl.syncidle), Ctx};
+handle_call(request_update, _From, Ctx) ->
+	{reply, maenmpc_sync_idle:interrupt_no_tx(Ctx#spl.syncidle), Ctx};
+handle_call({mpd_idle, Name, Subsystems, Conn}, _From, Ctx) ->
+	{reply, ok, update_playing_info(Name, Conn, Ctx)};
 handle_call({query_by_key, Key}, _From, Ctx) ->
 	% replaces populate with conn
 	% (slightly less efficient, but more regular approach)
@@ -58,18 +72,18 @@ handle_call({volume_change, Delta}, _From, Ctx) ->
 handle_call(_Call, _From, Ctx) ->
 	{reply, ok, Ctx}.
 
-is_status_subsystem(player)  -> true;  % start stop seek new song, tags changed
-is_status_subsystem(mixer)   -> true;  % the volume has been changed
-is_status_subsystem(options) -> true;  % repeat, random, crossfade, replay gain
-is_status_subsystem(_Other)  -> false.
+%is_status_subsystem(player)  -> true;  % start stop seek new song, tags changed
+%is_status_subsystem(mixer)   -> true;  % the volume has been changed
+%is_status_subsystem(options) -> true;  % repeat, random, crossfade, replay gain
+%is_status_subsystem(_Other)  -> false.
 
-update_playing_info(Conn, Ctx) ->
+update_playing_info(Name, Conn, Ctx) ->
 	% state, audio, volume, repeat, random, single, consume, xfade,
 	% updating_db, time
 	Status = erlmpd:status(Conn),
 	% file [uri], Artist, Date, Album, Track, Title, Time [duration],
 	CurrentSong = parse_metadata(erlmpd:currentsong(Conn), Ctx),
-	send_playing_info(Status, case CurrentSong#dbsong.key =:=
+	send_playing_info(Name, Status, case CurrentSong#dbsong.key =:=
 					Ctx#spl.current_song#dbsong.key of
 			true  -> Ctx;
 			false -> Ctx#spl{current_song=
@@ -89,9 +103,10 @@ query_rating(DBCMP, Conn, Ctx) ->
 						DBCMP#dbsong.uris), Conn)}
 	end.
 
-send_playing_info(Status, Ctx) ->
+send_playing_info(Name, Status, Ctx) ->
 	ok = gen_server:cast(Ctx#spl.db, {db_playing,
-			[{x_maenmpc, Ctx#spl.current_song}|Status]}),
+			[{x_maenmpc, Ctx#spl.current_song}|
+			[{x_maenmpc_name, Name}|Status]]}),
 	Ctx#spl{mpd_volume = proplists:get_value(volume, Status, -1)}.
 
 erlmpd_to_dbsong(Entry, Ctx) ->
