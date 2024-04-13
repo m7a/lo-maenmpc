@@ -3,7 +3,8 @@
 
 % TODO DERIVED FROM CLI - ONCE IT IS OK, RE-ALIGN CLI TO THIS HERE!
 % key          := {Artist, Album, Title}
-% uris         := tuple of URIs (binary()) in MPD list order! (TODO x DEVIATES)
+% uris         := tuple of URIs       (binary()) in MPD list order! (TODO x DEVIATES)
+% audios       := tuple of Audio info (binary()) in MPD list order
 % assoc_status is implicit from the presence of URIs!
 -record(dbsong, {key, uris, playcount, rating, duration, year, trackno, audios}).
 -type dbsong() :: #dbsong{key::{binary(), binary(), binary()}, uris::tuple(),
