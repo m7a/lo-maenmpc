@@ -1,6 +1,8 @@
 -module(maenmpc_mpd).
 -export([start/3, enter/3, interrupt/1]).
 
+% async idle
+
 start(Parent, MPDName, Config) ->
 	{ok, spawn_link(?MODULE, enter, [Parent, MPDName, Config])}.
 
