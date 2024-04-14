@@ -6,7 +6,13 @@
 % uris         := tuple of URIs       (binary()) in MPD list order! (TODO x DEVIATES)
 % audios       := tuple of Audio info (binary()) in MPD list order
 % assoc_status is implicit from the presence of URIs!
--record(dbsong, {key, uris, playcount, rating, duration, year, trackno, audios}).
+-record(dbsong, {key, uris, playcount, rating, duration, year, trackno, audios,
+		playlist_id}).
 -type dbsong() :: #dbsong{key::{binary(), binary(), binary()}, uris::tuple(),
 		playcount::integer(), rating::integer(), duration::integer(),
-		year::binary(), trackno::integer(), audios::binary()}.
+		year::binary(), trackno::integer(), audios::binary(),
+		playlist_id::integer()}.
+
+-record(queue, {cnt, total, qoffset, doffset}).
+-type queue() :: #queue{cnt::[dbsong()], total::integer(), qoffset::integer(),
+		doffset::integer()}.

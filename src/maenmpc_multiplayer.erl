@@ -2,7 +2,11 @@
 -behavior(gen_server).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
 -include_lib("maenmpc_db.hrl").
--record(mpl, {ui, alsa, mpd_list, mpd_active, mpd_ratings, current_song}).
+
+-record(mpl, {
+	ui, alsa, mpd_list, mpd_active, mpd_ratings,
+	current_song, current_queue
+}).
 
 init([NotifyToUI]) ->
 	{ok, PrimaryRatings} = application:get_env(maenmpc, primary_ratings),
@@ -16,12 +20,13 @@ init([NotifyToUI]) ->
 	gen_server:cast(NotifyToUI, {db_cidx,
 				proplists:get_value(MPDFirst, MPDListIdx)}),
 	{ok, #mpl{
-		ui           = NotifyToUI,
-		alsa         = ALSAHWInfo,
-		mpd_list     = MPDListIdx, % [{name, idx}]
-		mpd_active   = MPDFirst,
-		mpd_ratings  = PrimaryRatings,
-		current_song = #dbsong{key={<<>>, <<>>, <<>>}}
+		ui            = NotifyToUI,
+		alsa          = ALSAHWInfo,
+		mpd_list      = MPDListIdx, % [{name, idx}]
+		mpd_active    = MPDFirst,
+		mpd_ratings   = PrimaryRatings,
+		current_song  = #dbsong{key={<<>>, <<>>, <<>>}},
+		current_queue = #queue{cnt=[], total=-1, qoffset=0, doffset=0}
 	}}.
 
 handle_call(_Call, _From, Ctx) ->
@@ -56,6 +61,37 @@ handle_cast(R={ui_simple, _A, _B}, Ctx) ->
 handle_cast(R={ui_simple, _A}, Ctx) ->
 	call_singleplayer(Ctx#mpl.mpd_active, R),
 	{noreply, Ctx};
+handle_cast({ui_queue, ItemsRequested}, Ctx) ->
+	Ctx1 = Ctx#mpl{current_queue=case Ctx#mpl.current_queue#queue.total =< 0
+		of
+		true  -> call_singleplayer(Ctx#mpl.mpd_active,
+			{query_queue, ItemsRequested, Ctx#mpl.current_queue});
+		false -> Ctx#mpl.current_queue
+		end},
+	gen_server:cast(Ctx1#mpl.ui, {db_queue, Ctx1#mpl.current_queue,
+				Ctx1#mpl.current_song#dbsong.playlist_id}),
+	% TODO AUGMENT QUEUE WITH RATINGS / INFO FROM OTHER INSTANCE THEN SEND TO UI...
+	% TODO ALSO UPDATE QUEUE WHEN SUBSYSTEM IDLE INDICATES IT...
+	% TODO SEND QUEUE TO UI
+	{noreply, Ctx1};
+handle_cast({ui_queue_scroll, Offset, ItemsRequested}, Ctx) ->
+	NewOffset = min(Ctx#mpl.current_queue#queue.total,
+			max(0, Ctx#mpl.current_queue#queue.doffset + Offset)),
+	Ctx1 = Ctx#mpl{current_queue =
+			Ctx#mpl.current_queue#queue{doffset = NewOffset}},
+	% TODO LOOKS REDUNDANT TO ABOVE ALSO MISSES THE SAME POSTPROCESSING STUFF!
+	Ctx2 = Ctx1#mpl{current_queue=case Ctx1#mpl.current_queue#queue.doffset
+				>= Ctx1#mpl.current_queue#queue.qoffset andalso
+			NewOffset + ItemsRequested =<
+				Ctx1#mpl.current_queue#queue.qoffset +
+				length(Ctx1#mpl.current_queue#queue.cnt) of
+		true  -> Ctx1#mpl.current_queue; % current data sufficient, use
+		false -> call_singleplayer(Ctx1#mpl.mpd_active,
+			{query_queue, ItemsRequested, Ctx1#mpl.current_queue})
+		end},
+	gen_server:cast(Ctx2#mpl.ui, {db_queue, Ctx2#mpl.current_queue,
+				Ctx2#mpl.current_song#dbsong.playlist_id}),
+	{noreply, Ctx2};
 handle_cast({mpd_assign_error, Name, Reason}, Ctx) ->
 	gen_server:cast(Ctx#mpl.ui, {db_error, {offline, Name, Reason}}),
 	{noreply, Ctx};

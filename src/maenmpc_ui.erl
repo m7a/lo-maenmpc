@@ -14,8 +14,9 @@
 
 -record(view, {
 	height, width,
-	wnd_song, wnd_card, wnd_main, wnd_status, wnd_keys,
-	db, cidx
+	wnd_song, wnd_card, wnd_main, wnd_sel, wnd_sel_card, wnd_status,
+	wnd_keys,
+	db, cidx, page
 }).
 
 init([NotifyToDB]) ->
@@ -26,7 +27,7 @@ init([NotifyToDB]) ->
 	cecho:keypad(?ceSTDSCR, true),
 	{Height, Width} = cecho:getmaxyx(),
 	{ok, init_windows(#view{height = Height, width = Width,
-						db = NotifyToDB, cidx = 1})}.
+				db = NotifyToDB, cidx = 1, page = help})}.
 
 init_color_pairs() ->
 	cecho:init_pair(?CPAIR_DEFAULT,     ?ceCOLOR_WHITE,  ?ceCOLOR_BLACK),
@@ -39,21 +40,28 @@ init_color_pairs() ->
 
 init_windows(Ctx0) ->
 	WW1 = max(0, Ctx0#view.width - 35),
+	WW2 = max(0, Ctx0#view.width - 21),
+	YW2 = max(0, Ctx0#view.height - 7),
 	Ctx1 = Ctx0#view{
-		wnd_song = cecho:newwin(4, WW1, 0, 0),
-		wnd_card = cecho:newwin(4, 35, 0, WW1),
-		wnd_main = cecho:newwin(Ctx0#view.height - 7,
-						Ctx0#view.width, 6, 0),
-		wnd_status = cecho:newwin(2, Ctx0#view.width,
-						Ctx0#view.height - 3, 0),
-		wnd_keys = cecho:newwin(1, Ctx0#view.width,
-						Ctx0#view.height - 1, 0)
+		wnd_song     = cecho:newwin(4, WW1, 0, 0),
+		wnd_card     = cecho:newwin(4, 35,  0, WW1),
+		wnd_sel      = cecho:newwin(5, WW2, YW2, 0),
+		wnd_sel_card = cecho:newwin(5, 21, YW2, WW2),
+		wnd_main     = cecho:newwin(main_height(Ctx0),
+					Ctx0#view.width, 4, 0),
+		wnd_status   = cecho:newwin(1, Ctx0#view.width,
+					max(0, Ctx0#view.height - 2), 0),
+		wnd_keys     = cecho:newwin(1, Ctx0#view.width,
+					max(0, Ctx0#view.height - 1), 0)
 	},
 	Ctx2 = wnd_static_draw(Ctx1),
-	cecho:mvwaddstr(Ctx2#view.wnd_status, 1, 0, "Initializing..."),
+	cecho:mvwaddstr(Ctx2#view.wnd_status, 0, 0, "Initializing..."),
 	cecho:attroff(Ctx2#view.wnd_status, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
 	cecho:wrefresh(Ctx2#view.wnd_status),
 	Ctx2.
+
+main_height(Ctx) ->
+	max(0, Ctx#view.height - 11).
 
 wnd_static_draw(Ctx) ->
 	% song
@@ -66,11 +74,15 @@ wnd_static_draw(Ctx) ->
 	cecho:wrefresh(Ctx#view.wnd_card),
 	% status
 	cecho:werase(Ctx#view.wnd_status),
-	accent(Ctx, Ctx#view.wnd_status, on, std),
-	cecho:wborder(Ctx#view.wnd_status, $ , $ , $-, $ , $-, $-, $ , $ ),
-	accent(Ctx, Ctx#view.wnd_status, off, std),
-	cecho:attron(Ctx#view.wnd_status, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
 	cecho:wrefresh(Ctx#view.wnd_status),
+	% sel
+	cecho:werase(Ctx#view.wnd_sel),
+	draw_sel_border(Ctx),
+	cecho:wrefresh(Ctx#view.wnd_sel),
+	% sel_card
+	cecho:werase(Ctx#view.wnd_sel_card),
+	draw_sel_card_border(Ctx),
+	cecho:wrefresh(Ctx#view.wnd_sel_card),
 	% keys
 	cecho:werase(Ctx#view.wnd_keys),
 	lists:foreach(fun({FKey, Msg}) ->
@@ -114,24 +126,38 @@ draw_song_border(Ctx) ->
 	cecho:wborder(Ctx#view.wnd_song, $ , $|, $ , $-, $ , $|, $-, $+),
 	accent(Ctx, Ctx#view.wnd_song, off, std).
 
+draw_sel_border(Ctx) ->
+	accent(Ctx, Ctx#view.wnd_sel, on, std),
+	cecho:wborder(Ctx#view.wnd_sel, $ , $|, $-, $-, $-, $+, $-, $+),
+	accent(Ctx, Ctx#view.wnd_sel, off, std).
+
+draw_sel_card_border(Ctx) ->
+	accent(Ctx, Ctx#view.wnd_sel_card, on, std),
+	cecho:wborder(Ctx#view.wnd_sel_card, $ , $ , $-, $-, $-, $-, $-, $-),
+	accent(Ctx, Ctx#view.wnd_sel_card, off, std).
+
 handle_call(_Call, _From, Context) ->
 	{reply, ok, Context}.
 
 handle_cast({getch, Character}, Ctx) ->
 	{noreply, case Character of
-		?ceKEY_LEFT  -> ui_request(Ctx, {ui_simple, volume_change, -1});
-		?ceKEY_RIGHT -> ui_request(Ctx, {ui_simple, volume_change, +1});
-		$s           -> ui_request(Ctx, {ui_simple, stop});
-		$P           -> ui_request(Ctx, {ui_simple, toggle_pause});
-		$r           -> ui_request(Ctx, {ui_simple, toggle_repeat});
-		$z           -> ui_request(Ctx, {ui_simple, toggle_random});
-		$y           -> ui_request(Ctx, {ui_simple, toggle_single});
-		$C           -> ui_request(Ctx, {ui_simple, toggle_consume});
-		$x           -> ui_request(Ctx, {ui_simple, toggle_xfade});
-		%?ceKEY_F(2) ->
-		%	page_new_start(Context);
-		?ceKEY_F(10) -> init:stop(0), Ctx;
-		_Any         -> Ctx
+		?ceKEY_LEFT   -> ui_request(Ctx, {ui_simple, volume_change, -1});
+		?ceKEY_RIGHT  -> ui_request(Ctx, {ui_simple, volume_change, +1});
+		$s            -> ui_request(Ctx, {ui_simple, stop});
+		$P            -> ui_request(Ctx, {ui_simple, toggle_pause});
+		$r            -> ui_request(Ctx, {ui_simple, toggle_repeat});
+		$z            -> ui_request(Ctx, {ui_simple, toggle_random});
+		$y            -> ui_request(Ctx, {ui_simple, toggle_single});
+		$C            -> ui_request(Ctx, {ui_simple, toggle_consume});
+		$x            -> ui_request(Ctx, {ui_simple, toggle_xfade});
+		?ceKEY_UP     -> ui_scroll(Ctx, -1);
+		?ceKEY_DOWN   -> ui_scroll(Ctx, +1);
+		?ceKEY_PGDOWN -> ui_scroll(Ctx, main_height(Ctx) - 1);
+		?ceKEY_PGUP   -> ui_scroll(Ctx, 1 - main_height(Ctx));
+		?ceKEY_F(2)   -> ui_request(Ctx#view{page=queue},
+					{ui_queue, main_height(Ctx) - 1});
+		?ceKEY_F(10)  -> init:stop(0), Ctx;
+		_Any          -> Ctx
 	end};
 handle_cast({db_cidx, CIDX}, Ctx) ->
 	{noreply, wnd_static_draw(Ctx#view{cidx=CIDX})};
@@ -142,6 +168,11 @@ handle_cast({db_playing, SongAndStatus}, Ctx) ->
 		undefined -> draw_song_and_status(Ctx, SongAndStatus);
 		ErrorInfo -> display_error(Ctx, io_lib:format(
 					"status query error: ~w", [ErrorInfo]))
+	end};
+handle_cast({db_queue, Queue, CurrentSongID}, Ctx) ->
+	{noreply, case Ctx#view.page =:= queue of
+		true  -> draw_queue(Ctx, Queue, CurrentSongID);
+		false -> Ctx
 	end};
 handle_cast(_Cast, Ctx) ->
 	{noreply, Ctx}.
@@ -245,9 +276,61 @@ status_flag(BVal, Flag) ->
 display_error(Ctx, Error) ->
 	cecho:werase(Ctx#view.wnd_status),
 	cecho:attron(Ctx#view.wnd_status, ?ceCOLOR_PAIR(?CPAIR_ERROR)),
-	cecho:mvwaddstr(Ctx#view.wnd_status, 1, 0, Error),
+	cecho:mvwaddstr(Ctx#view.wnd_status, 0, 0, Error),
 	cecho:attroff(Ctx#view.wnd_status, ?ceCOLOR_PAIR(?CPAIR_ERROR)),
+	cecho:wrefresh(Ctx#view.wnd_status),
 	Ctx.
+
+draw_queue(Ctx, Queue, CurrentSongID) ->
+	cecho:werase(Ctx#view.wnd_main),
+	WA = max(1, (Ctx#view.width - 20) * 1 div 3),
+	WT = max(1, (Ctx#view.width - 20) * 2 div 3),
+	cecho:mvwaddstr(Ctx#view.wnd_main, 0, 0,
+				io_lib:format("  Rated  ~s  ~s  MM:ss",
+				[utf8pad(WA, "Artist"), utf8pad(WT, "Title")])),
+	cecho:mvwaddstr(Ctx#view.wnd_main, 0, Ctx#view.width - 1, "_"),
+	MaxDraw = max(0, main_height(Ctx) - 1),
+	DrawItems = lists:sublist(Queue#queue.cnt,
+			Queue#queue.doffset - Queue#queue.qoffset + 1, MaxDraw),
+	SHeight = max(1, length(DrawItems) * MaxDraw /
+						max(1, Queue#queue.total)),
+	SOffset = max(0, Queue#queue.doffset * MaxDraw / Queue#queue.total -
+						SHeight / 2),
+	lists:foreach(fun({S, Y}) ->
+		IsCurrent = S#dbsong.playlist_id =:= CurrentSongID andalso
+							CurrentSongID /= -1,
+		% TODO SHOULD BE DEPENDING ON ASSOC STATUS!
+		Atts = ?ceCOLOR_PAIR(?CPAIR_DEFAULT) bor
+			case IsCurrent of true -> ?ceA_BOLD; false -> 0 end,
+		cecho:attron(Ctx#view.wnd_main, Atts),
+		cecho:mvwaddstr(Ctx#view.wnd_main, Y, 0,
+			io_lib:format("~c ~s  ~s  ~s  ~2..0w:~2..0w",
+			[case IsCurrent of true  -> $>; false -> $ end,
+			format_rating(S#dbsong.rating),
+			utf8pad(WA, element(1, S#dbsong.key)),
+			utf8pad(WT, element(3, S#dbsong.key)),
+			S#dbsong.duration div 60,
+			S#dbsong.duration rem 60])),
+		cecho:attroff(Ctx#view.wnd_main, Atts),
+		draw_scroll(Ctx, SHeight, SOffset, Y)
+	end, lists:zip(DrawItems, lists:seq(1, length(DrawItems)))),
+	lists:foreach(fun(Y) -> draw_scroll(Ctx, SHeight, SOffset, Y) end,
+					lists:seq(length(DrawItems), MaxDraw)),
+	cecho:wrefresh(Ctx#view.wnd_main),
+	Ctx.
+
+draw_scroll(Ctx, SHeight, SOffset, Y) ->
+	case Y >= SOffset andalso Y =< (SOffset + SHeight) of
+	true  -> cecho:mvwaddstr(Ctx#view.wnd_main, Y, Ctx#view.width - 1, "#");
+	false -> ok
+	end.
+
+ui_scroll(Ctx, Offset) ->
+	case Ctx#view.page of
+	queue -> ui_request(Ctx, {ui_queue_scroll, Offset,
+							main_height(Ctx) - 1});
+	_Other -> Ctx % scrolling currently not supported for other views
+	end.
 
 handle_info(_Message,    Context)         -> {noreply, Context}.
 code_change(_OldVersion, Context, _Extra) -> {ok,      Context}.

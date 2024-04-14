@@ -6,8 +6,8 @@
 -record(spl, {
 	db, syncidle, idx, len, current_song,
 	% keep track of MPD states as to allow toggle commands to be sent etc.
-	mpd_volume, mpd_state, mpd_repeat, mpd_random, mpd_single, mpd_consume,
-	mpd_xfade
+	mpd_volume, mpd_state, mpd_plength, mpd_repeat, mpd_random, mpd_single,
+	mpd_consume, mpd_xfade
 }).
 
 init(Properties) ->
@@ -18,6 +18,7 @@ init(Properties) ->
 		len         = proplists:get_value(len,      Properties),
 		mpd_volume  = -1,
 		mpd_state   = undefined,
+		mpd_plength = -1,
 		mpd_repeat  = false,
 		mpd_random  = false,
 		mpd_single  = false,
@@ -29,7 +30,8 @@ init(Properties) ->
 epsilon_song(Ctx) ->
 	EpsTPL = list_to_tuple(lists:duplicate(Ctx#spl.len, <<>>)),
 	#dbsong{key={<<>>, <<>>, <<>>}, uris=EpsTPL, playcount=0, rating=0,
-			duration=1, year = <<>>, trackno=0, audios=EpsTPL}.
+			duration=1, year = <<>>, trackno=0, audios=EpsTPL,
+			playlist_id=-1}.
 
 % TODO CASE database, playlist, output, sticker?
 %handle_idle(database, Context, _Name) ->
@@ -84,6 +86,32 @@ handle_call({ui_simple, Action}, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
 		ui_simple_tx(Action, Conn, Ctx)
 	end), Ctx};
+handle_call({query_queue, ItemsRequested, CurrentQ}, _From, Ctx) ->
+	% TODO FOR NOW A NON-INCREMENTAL APPROACH: JUST QUERY FROM qoffset .. max(doffset + ItemsRequsted, qoffset + ItemsRequested  * 3)
+	%case length(CurrentQ#queue.cnt) < CurrentQ#queue.doffset + ItemsRequested
+	% TODO THIS IS ALL HIGHLY INCOMPLETE. SHOULD ADJUST QOFFSET ACCORDING TO DOFFSET ETC.
+	RQQ = max(20, ItemsRequested),
+	Q0  = CurrentQ#queue.qoffset,
+	Q1  = max(CurrentQ#queue.doffset + RQQ * 2,
+					CurrentQ#queue.qoffset + RQQ * 3),
+	{NewQ, Ctx2} = maenmpc_sync_idle:run_transaction(
+						Ctx#spl.syncidle, fun(Conn) ->
+		Ctx1 = case Ctx#spl.mpd_plength =< 0 of
+			 true  -> update_status(erlmpd:status(Conn), Ctx);
+			 false -> Ctx
+			 end,
+		Q0A = min(Q0, Ctx1#spl.mpd_plength),
+		Q1A = min(Q1, Ctx1#spl.mpd_plength),
+		% TODO x OVERKILL TO QUERY RATING HERE / DO IT “OUTSIDE” ONLY or provide a flag about whether to do it...? Maybe we should configure this for the entire instance to resolve this question.
+		{CurrentQ#queue{
+			% TODO FOR EXPERIMENTATION ONLY TEST WITH AND WITHOUT RATING HERE
+			cnt=[query_rating(parse_metadata(El, Ctx1), Conn, Ctx1) || El <- erlmpd:playlistinfo(Conn, {Q0A, Q1A})],
+			%cnt=[parse_metadata(El, Ctx1) || El <- erlmpd:playlistinfo(Conn, {Q0A, Q1A})],
+			total=Ctx1#spl.mpd_plength,
+			qoffset=Q0A
+		}, Ctx1}
+	end),
+	{reply, NewQ, Ctx2};
 % TODO ALL OTHER INTERACTIVE FUNCTION STUFF GOES HERE...
 handle_call(_Call, _From, Ctx) ->
 	{reply, ok, Ctx}.
@@ -123,7 +151,11 @@ send_playing_info(Name, Status, Ctx) ->
 	ok = gen_server:cast(Ctx#spl.db, {db_playing,
 			[{x_maenmpc, Ctx#spl.current_song}|
 			[{x_maenmpc_name, Name}|Status]]}),
+	update_status(Status, Ctx).
+
+update_status(Status, Ctx) ->
 	Ctx#spl{mpd_volume  = proplists:get_value(volume,  Status, -1),
+		mpd_plength = proplists:get_value(playlistlength, Status, -1),
 		mpd_state   = proplists:get_value(state,   Status, undefined),
 		mpd_repeat  = proplists:get_value(repeat,  Status, false),
 		mpd_random  = proplists:get_value(random,  Status, false),
@@ -140,7 +172,8 @@ erlmpd_to_dbsong(Entry, Ctx) ->
 		year         = proplists:get_value('Date',  Entry, <<>>),
 		trackno      = proplists:get_value('Track', Entry, 0),
 		audios       = new_tuple(proplists:get_value('Format', Entry,
-								<<>>), Ctx)}.
+								<<>>), Ctx),
+		playlist_id  = proplists:get_value('Id', Entry, -1)}.
 
 new_tuple(Value, Ctx) ->
 	list_to_tuple([case Idx =:= Ctx#spl.idx of
