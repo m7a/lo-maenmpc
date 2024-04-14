@@ -50,8 +50,11 @@ handle_cast({db_playing, Info}, Ctx) ->
 		% Don't care what other players are playing...
 		Ctx
 	end};
-handle_cast({ui_volume_change, Delta}, Ctx) ->
-	call_singleplayer(Ctx#mpl.mpd_active, {volume_change, Delta}),
+handle_cast(R={ui_simple, _A, _B}, Ctx) ->
+	call_singleplayer(Ctx#mpl.mpd_active, R),
+	{noreply, Ctx};
+handle_cast(R={ui_simple, _A}, Ctx) ->
+	call_singleplayer(Ctx#mpl.mpd_active, R),
 	{noreply, Ctx};
 handle_cast({mpd_assign_error, Name, Reason}, Ctx) ->
 	gen_server:cast(Ctx#mpl.ui, {db_error, {offline, Name, Reason}}),

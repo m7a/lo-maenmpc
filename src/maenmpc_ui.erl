@@ -119,32 +119,36 @@ handle_call(_Call, _From, Context) ->
 
 handle_cast({getch, Character}, Ctx) ->
 	{noreply, case Character of
-		?ceKEY_LEFT ->
-			gen_server:cast(Ctx#view.db, {ui_volume_change, -1}),
-			Ctx;
-		?ceKEY_RIGHT ->
-			gen_server:cast(Ctx#view.db, {ui_volume_change, +1}),
-			Ctx;
+		?ceKEY_LEFT  -> ui_request(Ctx, {ui_simple, volume_change, -1});
+		?ceKEY_RIGHT -> ui_request(Ctx, {ui_simple, volume_change, +1});
+		$s           -> ui_request(Ctx, {ui_simple, stop});
+		$P           -> ui_request(Ctx, {ui_simple, toggle_pause});
+		$r           -> ui_request(Ctx, {ui_simple, toggle_repeat});
+		$z           -> ui_request(Ctx, {ui_simple, toggle_random});
+		$y           -> ui_request(Ctx, {ui_simple, toggle_single});
+		$C           -> ui_request(Ctx, {ui_simple, toggle_consume});
+		$x           -> ui_request(Ctx, {ui_simple, toggle_xfade});
 		%?ceKEY_F(2) ->
 		%	page_new_start(Context);
-		?ceKEY_F(10) ->
-			init:stop(0),
-			Ctx;
-		_Any ->
-			Ctx
-		end};
+		?ceKEY_F(10) -> init:stop(0), Ctx;
+		_Any         -> Ctx
+	end};
 handle_cast({db_cidx, CIDX}, Ctx) ->
 	{noreply, wnd_static_draw(Ctx#view{cidx=CIDX})};
 handle_cast({db_error, Info}, Ctx) ->
 	{noreply, display_error(Ctx, io_lib:format("DB error: ~w", [Info]))};
 handle_cast({db_playing, SongAndStatus}, Ctx) ->
 	{noreply, case proplists:get_value(error, SongAndStatus) of
-			undefined -> draw_song_and_status(Ctx, SongAndStatus);
-			ErrorInfo -> display_error(Ctx, io_lib:format(
+		undefined -> draw_song_and_status(Ctx, SongAndStatus);
+		ErrorInfo -> display_error(Ctx, io_lib:format(
 					"status query error: ~w", [ErrorInfo]))
-		end};
+	end};
 handle_cast(_Cast, Ctx) ->
 	{noreply, Ctx}.
+
+ui_request(Ctx, Request) ->
+	gen_server:cast(Ctx#view.db, Request),
+	Ctx.
 
 draw_song_and_status(Ctx, Info) ->
 	% -- Song Info --

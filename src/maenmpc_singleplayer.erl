@@ -2,15 +2,27 @@
 -behavior(gen_server).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
 -include_lib("maenmpc_db.hrl").
--record(spl, {db, syncidle, idx, len, mpd_volume, current_song}).
+
+-record(spl, {
+	db, syncidle, idx, len, current_song,
+	% keep track of MPD states as to allow toggle commands to be sent etc.
+	mpd_volume, mpd_state, mpd_repeat, mpd_random, mpd_single, mpd_consume,
+	mpd_xfade
+}).
 
 init(Properties) ->
 	InitialState = #spl{
-		db         = proplists:get_value(db,       Properties),
-		syncidle   = proplists:get_value(syncidle, Properties),
-		idx        = proplists:get_value(idx,      Properties),
-		len        = proplists:get_value(len,      Properties),
-		mpd_volume = -1
+		db          = proplists:get_value(db,       Properties),
+		syncidle    = proplists:get_value(syncidle, Properties),
+		idx         = proplists:get_value(idx,      Properties),
+		len         = proplists:get_value(len,      Properties),
+		mpd_volume  = -1,
+		mpd_state   = undefined,
+		mpd_repeat  = false,
+		mpd_random  = false,
+		mpd_single  = false,
+		mpd_consume = false,
+		mpd_xfade   = 0
 	},
 	{ok, InitialState#spl{current_song = epsilon_song(InitialState)}}.
 
@@ -38,7 +50,7 @@ handle_call(is_online, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:is_online(Ctx#spl.syncidle), Ctx};
 handle_call(request_update, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:interrupt_no_tx(Ctx#spl.syncidle), Ctx};
-handle_call({mpd_idle, Name, Subsystems, Conn}, _From, Ctx) ->
+handle_call({mpd_idle, Name, _Subsystems, Conn}, _From, Ctx) ->
 	{reply, ok, update_playing_info(Name, Conn, Ctx)};
 handle_call({query_by_key, Key}, _From, Ctx) ->
 	% replaces populate with conn
@@ -60,7 +72,7 @@ handle_call({query_by_key, Key}, _From, Ctx) ->
 		% be disrupted.
 		end
 	end), Ctx};
-handle_call({volume_change, Delta}, _From, Ctx) ->
+handle_call({ui_simple, volume_change, Delta}, _From, Ctx) ->
 	NewVal = Ctx#spl.mpd_volume + Delta,
 	{reply, case Ctx#spl.mpd_volume /= -1 andalso
 					 NewVal >= 0 andalso NewVal =< 100 of
@@ -68,6 +80,10 @@ handle_call({volume_change, Delta}, _From, Ctx) ->
 				fun(Conn) -> erlmpd:setvol(Conn, NewVal) end);
 		false -> ok
 	end, Ctx};
+handle_call({ui_simple, Action}, _From, Ctx) ->
+	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
+		ui_simple_tx(Action, Conn, Ctx)
+	end), Ctx};
 % TODO ALL OTHER INTERACTIVE FUNCTION STUFF GOES HERE...
 handle_call(_Call, _From, Ctx) ->
 	{reply, ok, Ctx}.
@@ -107,7 +123,13 @@ send_playing_info(Name, Status, Ctx) ->
 	ok = gen_server:cast(Ctx#spl.db, {db_playing,
 			[{x_maenmpc, Ctx#spl.current_song}|
 			[{x_maenmpc_name, Name}|Status]]}),
-	Ctx#spl{mpd_volume = proplists:get_value(volume, Status, -1)}.
+	Ctx#spl{mpd_volume  = proplists:get_value(volume,  Status, -1),
+		mpd_state   = proplists:get_value(state,   Status, undefined),
+		mpd_repeat  = proplists:get_value(repeat,  Status, false),
+		mpd_random  = proplists:get_value(random,  Status, false),
+		mpd_single  = proplists:get_value(single,  Status, false),
+		mpd_consume = proplists:get_value(consume, Status, false),
+		mpd_xfade   = proplists:get_value(xfade,   Status, 0)}.
 
 erlmpd_to_dbsong(Entry, Ctx) ->
 	#dbsong{key          = erlmpd_to_key(Entry),
@@ -158,6 +180,26 @@ rating_for_uri(RatingURI, Conn) ->
 			 NotOne -> NotOne * 10
 			 end
 	end.
+
+ui_simple_tx(stop, Conn, _Ctx) ->
+	erlmpd:stop(Conn);
+ui_simple_tx(toggle_pause, Conn, Ctx) ->
+	case Ctx#spl.mpd_state of
+	undefined -> ok; % Cannot do anyhting in undefined state
+	play      -> erlmpd:pause(Conn, true);
+	pause     -> erlmpd:pause(Conn, false);
+	stop      -> erlmpd:play(Conn)
+	end;
+ui_simple_tx(toggle_repeat, Conn, Ctx) ->
+	erlmpd:repeat(Conn, not Ctx#spl.mpd_repeat);
+ui_simple_tx(toggle_random, Conn, Ctx) ->
+	erlmpd:random(Conn, not Ctx#spl.mpd_random);
+ui_simple_tx(toggle_single, Conn, Ctx) ->
+	erlmpd:single(Conn, not Ctx#spl.mpd_single);
+ui_simple_tx(toggle_consume, Conn, Ctx) ->
+	erlmpd:consume(Conn, not Ctx#spl.mpd_consume);
+ui_simple_tx(toggle_xfade, Conn, Ctx) ->
+	erlmpd:crossfade(Conn, max(0, 5 - Ctx#spl.mpd_xfade)).
 
 handle_cast(Msg={mpd_assign_error, _MPDName, _Reason}, Ctx) ->
 	% bubble-up error
