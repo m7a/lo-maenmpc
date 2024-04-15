@@ -87,21 +87,15 @@ handle_call({ui_simple, Action}, _From, Ctx) ->
 		ui_simple_tx(Action, Conn, Ctx)
 	end), Ctx};
 handle_call({query_queue, ItemsRequested, CurrentQ}, _From, Ctx) ->
-	% TODO FOR NOW A NON-INCREMENTAL APPROACH: JUST QUERY FROM qoffset .. max(doffset + ItemsRequsted, qoffset + ItemsRequested  * 3)
-	%case length(CurrentQ#queue.cnt) < CurrentQ#queue.doffset + ItemsRequested
-	% TODO THIS IS ALL HIGHLY INCOMPLETE. SHOULD ADJUST QOFFSET ACCORDING TO DOFFSET ETC.
-	RQQ = max(20, ItemsRequested),
-	Q0  = CurrentQ#queue.qoffset,
-	Q1  = max(CurrentQ#queue.doffset + RQQ * 2,
-					CurrentQ#queue.qoffset + RQQ * 3),
 	{NewQ, Ctx2} = maenmpc_sync_idle:run_transaction(
 						Ctx#spl.syncidle, fun(Conn) ->
 		Ctx1 = case Ctx#spl.mpd_plength =< 0 of
 			 true  -> update_status(erlmpd:status(Conn), Ctx);
 			 false -> Ctx
 			 end,
-		Q0A = min(Q0, Ctx1#spl.mpd_plength),
-		Q1A = min(Q1, Ctx1#spl.mpd_plength),
+		Q0A = min(CurrentQ#queue.qoffset, Ctx1#spl.mpd_plength),
+		Q1A = min(CurrentQ#queue.qoffset + ItemsRequested,
+							Ctx1#spl.mpd_plength),
 		% TODO x OVERKILL TO QUERY RATING HERE / DO IT “OUTSIDE” ONLY or provide a flag about whether to do it...? Maybe we should configure this for the entire instance to resolve this question.
 		{CurrentQ#queue{
 			% TODO FOR EXPERIMENTATION ONLY TEST WITH AND WITHOUT RATING HERE

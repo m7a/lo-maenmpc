@@ -62,36 +62,16 @@ handle_cast(R={ui_simple, _A}, Ctx) ->
 	call_singleplayer(Ctx#mpl.mpd_active, R),
 	{noreply, Ctx};
 handle_cast({ui_queue, ItemsRequested}, Ctx) ->
-	Ctx1 = Ctx#mpl{current_queue=case Ctx#mpl.current_queue#queue.total =< 0
-		of
-		true  -> call_singleplayer(Ctx#mpl.mpd_active,
-			{query_queue, ItemsRequested, Ctx#mpl.current_queue});
-		false -> Ctx#mpl.current_queue
-		end},
-	gen_server:cast(Ctx1#mpl.ui, {db_queue, Ctx1#mpl.current_queue,
-				Ctx1#mpl.current_song#dbsong.playlist_id}),
-	% TODO AUGMENT QUEUE WITH RATINGS / INFO FROM OTHER INSTANCE THEN SEND TO UI...
-	% TODO ALSO UPDATE QUEUE WHEN SUBSYSTEM IDLE INDICATES IT...
-	% TODO SEND QUEUE TO UI
-	{noreply, Ctx1};
+	{noreply, check_range_and_proc(ItemsRequested, Ctx)};
 handle_cast({ui_queue_scroll, Offset, ItemsRequested}, Ctx) ->
-	NewOffset = min(Ctx#mpl.current_queue#queue.total,
-			max(0, Ctx#mpl.current_queue#queue.doffset + Offset)),
-	Ctx1 = Ctx#mpl{current_queue =
-			Ctx#mpl.current_queue#queue{doffset = NewOffset}},
-	% TODO LOOKS REDUNDANT TO ABOVE ALSO MISSES THE SAME POSTPROCESSING STUFF!
-	Ctx2 = Ctx1#mpl{current_queue=case Ctx1#mpl.current_queue#queue.doffset
-				>= Ctx1#mpl.current_queue#queue.qoffset andalso
-			NewOffset + ItemsRequested =<
-				Ctx1#mpl.current_queue#queue.qoffset +
-				length(Ctx1#mpl.current_queue#queue.cnt) of
-		true  -> Ctx1#mpl.current_queue; % current data sufficient, use
-		false -> call_singleplayer(Ctx1#mpl.mpd_active,
-			{query_queue, ItemsRequested, Ctx1#mpl.current_queue})
-		end},
-	gen_server:cast(Ctx2#mpl.ui, {db_queue, Ctx2#mpl.current_queue,
-				Ctx2#mpl.current_song#dbsong.playlist_id}),
-	{noreply, Ctx2};
+	NewOffset = max(0,
+		min(Ctx#mpl.current_queue#queue.total - ItemsRequested,
+		max(0, Ctx#mpl.current_queue#queue.doffset + Offset))),
+	{noreply, case NewOffset == Ctx#mpl.current_queue#queue.doffset of
+	true  -> Ctx;
+	false -> check_range_and_proc(ItemsRequested, Ctx#mpl{current_queue =
+			Ctx#mpl.current_queue#queue{doffset = NewOffset}})
+	end};
 handle_cast({mpd_assign_error, Name, Reason}, Ctx) ->
 	gen_server:cast(Ctx#mpl.ui, {db_error, {offline, Name, Reason}}),
 	{noreply, Ctx};
@@ -159,6 +139,82 @@ query_alsa(ALSA) ->
 		Rate = proplists:get_value(<<"rate:">>, Proplist),
 		[Rate, <<":__:">>, Chan]
 	end.
+
+check_range_and_proc(ItemsRequested, Ctx) ->
+	% TODO x could it make sense to inline the two functions?
+	proc_range_result(check_in_range(ItemsRequested, Ctx),
+							ItemsRequested, Ctx).
+
+check_in_range(R, Ctx) ->
+	Len     = length(Ctx#mpl.current_queue#queue.cnt),
+	DOffset = Ctx#mpl.current_queue#queue.doffset,
+	QOffset = Ctx#mpl.current_queue#queue.qoffset,
+	if
+	DOffset - QOffset >= R andalso Len - (DOffset + R) >= R ->
+		{in_range, ok};
+	DOffset - QOffset >= 0 andalso Len - (DOffset + R) >= 0 ->
+		case DOffset - QOffset < R of
+		true  -> {in_range, query_before};
+		false -> {in_range, query_after}
+		end;
+	true ->
+		out_of_range
+	end.
+
+proc_range_result(RangeResult, ItemsRequested, Ctx) ->
+	PreCtx = case RangeResult of
+		out_of_range -> Ctx#mpl{current_queue=query_queue(
+			ItemsRequested * 5, Ctx#mpl.current_queue, Ctx)};
+		_Other1 -> Ctx
+		end,
+	gen_server:cast(PreCtx#mpl.ui, {db_queue, PreCtx#mpl.current_queue,
+				PreCtx#mpl.current_song#dbsong.playlist_id}),
+	case RangeResult of
+	{in_range, ok} ->
+		PreCtx;
+	{in_range, query_before} when
+				PreCtx#mpl.current_queue#queue.qoffset > 0 ->
+		QOffset = max(0, PreCtx#mpl.current_queue#queue.qoffset
+							- ItemsRequested),
+		QReq = min(PreCtx#mpl.current_queue#queue.qoffset,
+							ItemsRequested),
+		append_queue(query_queue(QReq, #queue{qoffset=QOffset}, PreCtx),
+									PreCtx);
+	{in_range, query_after} ->
+		QOffset = PreCtx#mpl.current_queue#queue.qoffset +
+				length(PreCtx#mpl.current_queue#queue.cnt),
+		QReq = min(ItemsRequested, PreCtx#mpl.current_queue#queue.total
+				- PreCtx#mpl.current_queue#queue.qoffset),
+		case QReq =< 0 of
+		true -> PreCtx;
+		false -> append_queue(query_queue(QReq,
+				#queue{qoffset=QOffset}, PreCtx), PreCtx)
+		end;
+	_Other2 ->
+		PreCtx
+	end.
+
+query_queue(ItemsRequested, QIn, Ctx) ->
+	RawResult = call_singleplayer(Ctx#mpl.mpd_active,
+					{query_queue, ItemsRequested, QIn}),
+	% TODO POST PROCESSING MAY BE REQUIRED HERE 
+	% TODO AUGMENT QUEUE WITH RATINGS / INFO FROM OTHER INSTANCE
+	RawResult.
+
+append_queue(NewQueue, Ctx) ->
+	OldQueue = Ctx#mpl.current_queue,
+	Ctx#mpl{current_queue=case NewQueue#queue.qoffset <
+						OldQueue#queue.qoffset of
+	true -> OldQueue#queue{
+			cnt     = NewQueue#queue.cnt ++ OldQueue#queue.cnt,
+			qoffset = NewQueue#queue.qoffset,
+			total   = NewQueue#queue.total
+		};
+	false -> OldQueue#queue{
+			cnt     = OldQueue#queue.cnt ++ NewQueue#queue.cnt,
+			total   = NewQueue#queue.total
+		}
+	end}.
 
 handle_info(interrupt_idle, Ctx) ->
 	call_singleplayer(Ctx#mpl.mpd_active, request_update),
