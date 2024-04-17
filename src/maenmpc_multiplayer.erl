@@ -26,7 +26,8 @@ init([NotifyToUI]) ->
 		mpd_active    = MPDFirst,
 		mpd_ratings   = PrimaryRatings,
 		current_song  = #dbsong{key={<<>>, <<>>, <<>>}},
-		current_queue = #queue{cnt=[], total=-1, qoffset=0, doffset=0}
+		current_queue = #queue{cnt=[], total=-1, qoffset=0, doffset=0,
+					dsel=0}
 	}}.
 
 handle_call(_Call, _From, Ctx) ->
@@ -64,14 +65,17 @@ handle_cast(R={ui_simple, _A}, Ctx) ->
 handle_cast({ui_queue, ItemsRequested}, Ctx) ->
 	{noreply, check_range_and_proc(ItemsRequested, Ctx)};
 handle_cast({ui_queue_scroll, Offset, ItemsRequested}, Ctx) ->
-	NewOffset = max(0,
-		min(Ctx#mpl.current_queue#queue.total - ItemsRequested,
-		max(0, Ctx#mpl.current_queue#queue.doffset + Offset))),
-	{noreply, case NewOffset == Ctx#mpl.current_queue#queue.doffset of
-	true  -> Ctx;
-	false -> check_range_and_proc(ItemsRequested, Ctx#mpl{current_queue =
-			Ctx#mpl.current_queue#queue{doffset = NewOffset}})
-	end};
+	DOffset = Ctx#mpl.current_queue#queue.doffset,
+	NewDSEL = max(0, min(Ctx#mpl.current_queue#queue.total - 1,
+				Ctx#mpl.current_queue#queue.dsel + Offset)),
+	NewDOffset = case NewDSEL < DOffset orelse NewDSEL >= DOffset +
+							ItemsRequested of
+		     true  -> max(0, min(Ctx#mpl.current_queue#queue.total -
+					ItemsRequested, DOffset + Offset));
+		     false -> DOffset
+		     end,
+	{noreply, check_range_and_proc(ItemsRequested, Ctx#mpl{current_queue=
+	Ctx#mpl.current_queue#queue{dsel = NewDSEL, doffset = NewDOffset}})};
 handle_cast({mpd_assign_error, Name, Reason}, Ctx) ->
 	gen_server:cast(Ctx#mpl.ui, {db_error, {offline, Name, Reason}}),
 	{noreply, Ctx};

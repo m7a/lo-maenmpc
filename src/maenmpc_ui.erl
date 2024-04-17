@@ -34,8 +34,8 @@ init_color_pairs() ->
 	cecho:init_pair(?CPAIR_DEFAULT_SEL, ?ceCOLOR_BLACK,  ?ceCOLOR_WHITE),
 	cecho:init_pair(?CPAIR_ACCENT1,     ?ceCOLOR_GREEN,  ?ceCOLOR_BLACK),
 	cecho:init_pair(?CPAIR_ACCENT1_SEL, ?ceCOLOR_WHITE,  ?ceCOLOR_GREEN),
-	cecho:init_pair(?CPAIR_ACCENT2,     ?ceCOLOR_BLUE,   ?ceCOLOR_BLACK),
-	cecho:init_pair(?CPAIR_ACCENT2_SEL, ?ceCOLOR_WHITE,  ?ceCOLOR_BLUE),
+	cecho:init_pair(?CPAIR_ACCENT2,     ?ceCOLOR_CYAN,   ?ceCOLOR_BLACK),
+	cecho:init_pair(?CPAIR_ACCENT2_SEL, ?ceCOLOR_BLACK,  ?ceCOLOR_CYAN),
 	cecho:init_pair(?CPAIR_ERROR,       ?ceCOLOR_RED,    ?ceCOLOR_BLACK).
 
 init_windows(Ctx0) ->
@@ -186,17 +186,8 @@ draw_song_and_status(Ctx, Info) ->
 	cecho:werase(Ctx#view.wnd_song),
 	draw_song_border(Ctx),
 	cecho:attron(Ctx#view.wnd_song, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
-	{_WH, WW} = cecho:getmaxyx(Ctx#view.wnd_song),
-	PadWidth = WW - 3,
 	DBE = proplists:get_value(x_maenmpc, Info),
-	cecho:mvwaddstr(Ctx#view.wnd_song, 0, 1, utf8pad(PadWidth,
-			io_lib:format("~s, ~s: ~s", [element(1, DBE#dbsong.key),
-			DBE#dbsong.year, element(2, DBE#dbsong.key)]))),
-	cecho:mvwaddstr(Ctx#view.wnd_song, 1, 1, utf8pad(PadWidth - 6,
-			io_lib:format("~2..0w - ~s",
-			[DBE#dbsong.trackno, element(3, DBE#dbsong.key)]))),
-	cecho:mvwaddstr(Ctx#view.wnd_song, 1, WW - 7,
-			format_rating(DBE#dbsong.rating)),
+	PadWidth = draw_basic_song_info(Ctx#view.wnd_song, DBE, 0),
 	cecho:mvwaddstr(Ctx#view.wnd_song, 2, 1, progress(PadWidth,
 			floor(proplists:get_value(time, Info, 0)),
 			DBE#dbsong.duration)),
@@ -206,11 +197,7 @@ draw_song_and_status(Ctx, Info) ->
 			-1        -> "Volume n/a";
 			PercVal   -> io_lib:format("Volume ~3w%", [PercVal])
 		end,
-	BitrateCurrent = io_lib:format("song:  ~11s",
-				[element(Ctx#view.cidx, DBE#dbsong.audios)]),
-	OtherIdx = (Ctx#view.cidx rem tuple_size(DBE#dbsong.audios)) + 1,
-	BitrateOther = io_lib:format("other: ~11s",
-				[element(OtherIdx, DBE#dbsong.audios)]),
+	{BitrateCurrent, BitrateOther} = get_bitrates(Ctx, DBE),
 	BitrateCard = io_lib:format("ALSA:  ~11s",
 				[proplists:get_value(x_maenmpc_alsa, Info)]),
 	InfoSymbol = case proplists:get_value(state, Info) of
@@ -243,6 +230,25 @@ draw_song_and_status(Ctx, Info) ->
 	cecho:wrefresh(Ctx#view.wnd_song),
 	Ctx.
 
+get_bitrates(Ctx, DBE) ->
+	OtherIdx = (Ctx#view.cidx rem tuple_size(DBE#dbsong.audios)) + 1,
+	{io_lib:format("song:  ~11s", [element(Ctx#view.cidx, DBE#dbsong.audios)]),
+	io_lib:format("other: ~11s", [element(OtherIdx, DBE#dbsong.audios)])}.
+
+% returns PadWidth
+draw_basic_song_info(WndSong, DBE, Y0) ->
+	{_WH, WW} = cecho:getmaxyx(WndSong),
+	PadWidth = WW - 3,
+	cecho:mvwaddstr(WndSong, Y0, 1, utf8pad(PadWidth,
+			io_lib:format("~s, ~s: ~s", [element(1, DBE#dbsong.key),
+			DBE#dbsong.year, element(2, DBE#dbsong.key)]))),
+	cecho:mvwaddstr(WndSong, Y0 + 1, 1, utf8pad(PadWidth - 6,
+			io_lib:format("~2..0w - ~s",
+			[DBE#dbsong.trackno, element(3, DBE#dbsong.key)]))),
+	cecho:mvwaddstr(WndSong, 1, PadWidth - 4,
+			format_rating(DBE#dbsong.rating)),
+	PadWidth.
+
 utf8pad(Pad, Str) ->
 	SL = string:length(Str),
 	case SL > Pad of
@@ -251,14 +257,6 @@ utf8pad(Pad, Str) ->
 								[Str, ""])
 	end.
 
-progress(PadWidth, Pos, OfTime) ->
-	BarWidth  = PadWidth - 14,
-	FillChars = Pos * BarWidth div OfTime,
-	io_lib:format("~s~s [~2..0w:~2..0w|~2..0w:~2..0w]",
-		[lists:duplicate(FillChars, $#),
-		lists:duplicate(BarWidth - FillChars, $_),
-		Pos div 60, Pos rem 60, OfTime div 60, OfTime rem 60]).
-
 format_rating(?RATING_UNRATED) ->
 	"?rate";
 format_rating(?RATING_ERROR) ->
@@ -266,6 +264,14 @@ format_rating(?RATING_ERROR) ->
 format_rating(Rating) ->
 	NumStars = Rating div 20,
 	lists:duplicate(NumStars, $*) ++ lists:duplicate(5 - NumStars, $.).
+
+progress(PadWidth, Pos, OfTime) ->
+	BarWidth  = PadWidth - 14,
+	FillChars = Pos * BarWidth div OfTime,
+	io_lib:format("~s~s [~2..0w:~2..0w|~2..0w:~2..0w]",
+		[lists:duplicate(FillChars, $#),
+		lists:duplicate(BarWidth - FillChars, $_),
+		Pos div 60, Pos rem 60, OfTime div 60, OfTime rem 60]).
 
 status_flag(BVal, Flag) ->
 	case BVal of
@@ -292,38 +298,81 @@ draw_queue(Ctx, Queue, CurrentSongID) ->
 	MaxDraw = max(0, main_height(Ctx) - 1),
 	DrawItems = lists:sublist(Queue#queue.cnt,
 			Queue#queue.doffset - Queue#queue.qoffset + 1, MaxDraw),
-	SHeight = max(1, length(DrawItems) * MaxDraw /
-						max(1, Queue#queue.total)),
-	SOffset = max(0, Queue#queue.doffset * MaxDraw / Queue#queue.total -
-						SHeight / 2),
-	lists:foreach(fun({S, Y}) ->
+	SHeight = max(1, min(MaxDraw, MaxDraw * MaxDraw div
+						max(1, Queue#queue.total))),
+	% TODO x CONVOLUTED BUT WORKS
+	SOffset = case 1 + (Queue#queue.doffset * MaxDraw div
+						max(Queue#queue.total, 1)) of
+		1 when Queue#queue.doffset /= 0 -> 2;
+		Value when Queue#queue.doffset + MaxDraw < Queue#queue.total ->
+			min(Value, max(0, MaxDraw - SHeight - 1));
+		Value -> Value
+		end,
+	SelVal = lists:foldl(fun({S, Y}, SelIn) ->
 		IsCurrent = S#dbsong.playlist_id =:= CurrentSongID andalso
 							CurrentSongID /= -1,
-		% TODO SHOULD BE DEPENDING ON ASSOC STATUS!
-		Atts = ?ceCOLOR_PAIR(?CPAIR_DEFAULT) bor
+		IsSel = Queue#queue.doffset + Y - 1 =:= Queue#queue.dsel,
+		% TODO x EXTRACT FUNCTION MAYBE
+		Atts = case S#dbsong.uris of
+			{<<>>, <<>>} when IsSel -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT_SEL);
+			{<<>>, <<>>}            -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT);
+			{_Any, <<>>} when IsSel -> ?ceCOLOR_PAIR(?CPAIR_ACCENT1_SEL);
+			{_Any, <<>>}            -> ?ceCOLOR_PAIR(?CPAIR_ACCENT1);
+			{<<>>, _Any} when IsSel -> ?ceCOLOR_PAIR(?CPAIR_ACCENT2_SEL);
+			{<<>>, _Any}            -> ?ceCOLOR_PAIR(?CPAIR_ACCENT2);
+			_Other when IsSel       -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT_SEL);
+			_Other                  -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT)
+			end bor
 			case IsCurrent of true -> ?ceA_BOLD; false -> 0 end,
 		cecho:attron(Ctx#view.wnd_main, Atts),
 		cecho:mvwaddstr(Ctx#view.wnd_main, Y, 0,
 			io_lib:format("~c ~s  ~s  ~s  ~2..0w:~2..0w",
-			[case IsCurrent of true  -> $>; false -> $ end,
+			[case IsCurrent of true -> $>; false -> $ end,
 			format_rating(S#dbsong.rating),
 			utf8pad(WA, element(1, S#dbsong.key)),
 			utf8pad(WT, element(3, S#dbsong.key)),
 			S#dbsong.duration div 60,
 			S#dbsong.duration rem 60])),
 		cecho:attroff(Ctx#view.wnd_main, Atts),
-		draw_scroll(Ctx, SHeight, SOffset, Y)
-	end, lists:zip(DrawItems, lists:seq(1, length(DrawItems)))),
+		draw_scroll(Ctx, SHeight, SOffset, Y),
+		case IsSel of true -> S; false -> SelIn end
+	end, none, lists:zip(DrawItems, lists:seq(1, length(DrawItems)))),
 	lists:foreach(fun(Y) -> draw_scroll(Ctx, SHeight, SOffset, Y) end,
 					lists:seq(length(DrawItems), MaxDraw)),
 	cecho:wrefresh(Ctx#view.wnd_main),
-	Ctx.
+	case SelVal of
+	none -> Ctx;
+	_Sel -> draw_sel(Ctx, SelVal)
+	end.
 
 draw_scroll(Ctx, SHeight, SOffset, Y) ->
 	case Y >= SOffset andalso Y =< (SOffset + SHeight) of
 	true  -> cecho:mvwaddstr(Ctx#view.wnd_main, Y, Ctx#view.width - 1, "#");
 	false -> ok
 	end.
+
+draw_sel(Ctx, S) ->
+	% sel
+	cecho:werase(Ctx#view.wnd_sel),
+	draw_sel_border(Ctx),
+	cecho:attron(Ctx#view.wnd_sel, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
+	PadWidth = draw_basic_song_info(Ctx#view.wnd_sel, S, 1),
+	cecho:mvwaddstr(Ctx#view.wnd_sel, 3, 1, utf8pad(PadWidth,
+			element(Ctx#view.cidx, S#dbsong.uris))),
+	cecho:attroff(Ctx#view.wnd_sel, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
+	cecho:wrefresh(Ctx#view.wnd_sel),
+	% sel_card
+	cecho:werase(Ctx#view.wnd_sel_card),
+	draw_sel_card_border(Ctx),
+	cecho:attron(Ctx#view.wnd_sel_card, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
+	{BitrateCurrent, BitrateOther} = get_bitrates(Ctx, S),
+	cecho:mvwaddstr(Ctx#view.wnd_sel_card, 1, 1, BitrateCurrent),
+	cecho:mvwaddstr(Ctx#view.wnd_sel_card, 2, 1, BitrateOther),
+	cecho:mvwaddstr(Ctx#view.wnd_sel_card, 3, 1,
+			io_lib:format("playcount: ~w", [S#dbsong.playcount])),
+	cecho:attroff(Ctx#view.wnd_sel_card, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
+	cecho:wrefresh(Ctx#view.wnd_sel_card),
+	Ctx.
 
 ui_scroll(Ctx, Offset) ->
 	case Ctx#view.page of

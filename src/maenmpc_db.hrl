@@ -13,6 +13,6 @@
 		year::binary(), trackno::integer(), audios::binary(),
 		playlist_id::integer()}.
 
--record(queue, {cnt, total, qoffset, doffset}).
+-record(queue, {cnt, total, qoffset, doffset, dsel}).
 -type queue() :: #queue{cnt::[dbsong()], total::integer(), qoffset::integer(),
 		doffset::integer()}.
