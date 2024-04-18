@@ -258,7 +258,7 @@ utf8pad(Pad, Str) ->
 	end.
 
 format_rating(?RATING_UNRATED) ->
-	"?rate";
+	"- - -";
 format_rating(?RATING_ERROR) ->
 	"!ERR!";
 format_rating(Rating) ->

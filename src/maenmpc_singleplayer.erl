@@ -4,7 +4,7 @@
 -include_lib("maenmpc_db.hrl").
 
 -record(spl, {
-	db, syncidle, idx, len, current_song,
+	db, syncidle, idx, len, is_rating, current_song,
 	% keep track of MPD states as to allow toggle commands to be sent etc.
 	mpd_volume, mpd_state, mpd_plength, mpd_repeat, mpd_random, mpd_single,
 	mpd_consume, mpd_xfade
@@ -16,6 +16,7 @@ init(Properties) ->
 		syncidle    = proplists:get_value(syncidle, Properties),
 		idx         = proplists:get_value(idx,      Properties),
 		len         = proplists:get_value(len,      Properties),
+		is_rating   = proplists:get_value(rating,   Properties, false),
 		mpd_volume  = -1,
 		mpd_state   = undefined,
 		mpd_plength = -1,
@@ -29,7 +30,7 @@ init(Properties) ->
 
 epsilon_song(Ctx) ->
 	EpsTPL = list_to_tuple(lists:duplicate(Ctx#spl.len, <<>>)),
-	#dbsong{key={<<>>, <<>>, <<>>}, uris=EpsTPL, playcount=0, rating=0,
+	#dbsong{key={<<>>, <<>>, <<>>}, uris=EpsTPL, playcount=0, rating=-1,
 			duration=1, year = <<>>, trackno=0, audios=EpsTPL,
 			playlist_id=-1}.
 
@@ -52,13 +53,18 @@ handle_call(is_online, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:is_online(Ctx#spl.syncidle), Ctx};
 handle_call(request_update, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:interrupt_no_tx(Ctx#spl.syncidle), Ctx};
-handle_call({mpd_idle, Name, _Subsystems, Conn}, _From, Ctx) ->
-	{reply, ok, update_playing_info(Name, Conn, Ctx)};
-handle_call({query_by_key, Key}, _From, Ctx) ->
+handle_call({mpd_idle, Name, Subsystems, Conn}, _From, Ctx) ->
+	Ctx1 = update_playing_info(Name, Conn, Ctx),
+	case lists:member(playlist, Subsystems) of
+	true   -> gen_server:cast(Ctx1#spl.db, {db_playlist_changed, Name});
+	_Other -> ok
+	end,
+	{reply, ok, Ctx1};
+handle_call({query_by_keys, Keys}, _From, Ctx) ->
 	% replaces populate with conn
 	% (slightly less efficient, but more regular approach)
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
-		case erlmpd:find(Conn,
+		[case erlmpd:find(Conn,
 				{land, [{tagop, artist, eq, element(1, Key)},
 					{tagop, album,  eq, element(2, Key)},
 					{tagop, title,  eq, element(3, Key)}]})
@@ -72,7 +78,7 @@ handle_call({query_by_key, Key}, _From, Ctx) ->
 		[_Element|_Others] -> epsilon_song(Ctx)
 		% else error is fatal because the connection state may
 		% be disrupted.
-		end
+		end || Key <- Keys]
 	end), Ctx};
 handle_call({ui_simple, volume_change, Delta}, _From, Ctx) ->
 	NewVal = Ctx#spl.mpd_volume + Delta,
@@ -96,11 +102,9 @@ handle_call({query_queue, ItemsRequested, CurrentQ}, _From, Ctx) ->
 		Q0A = min(CurrentQ#queue.qoffset, Ctx1#spl.mpd_plength),
 		Q1A = min(CurrentQ#queue.qoffset + ItemsRequested,
 							Ctx1#spl.mpd_plength),
-		% TODO x OVERKILL TO QUERY RATING HERE / DO IT “OUTSIDE” ONLY or provide a flag about whether to do it...? Maybe we should configure this for the entire instance to resolve this question.
 		{CurrentQ#queue{
-			% TODO FOR EXPERIMENTATION ONLY TEST WITH AND WITHOUT RATING HERE
-			cnt=[query_rating(parse_metadata(El, Ctx1), Conn, Ctx1) || El <- erlmpd:playlistinfo(Conn, {Q0A, Q1A})],
-			%cnt=[parse_metadata(El, Ctx1) || El <- erlmpd:playlistinfo(Conn, {Q0A, Q1A})],
+			cnt=[query_rating(parse_metadata(El, Ctx1), Conn, Ctx1)
+				|| El <- erlmpd:playlistinfo(Conn, {Q0A, Q1A})],
 			total=Ctx1#spl.mpd_plength,
 			qoffset=Q0A
 		}, Ctx1}
@@ -135,7 +139,8 @@ parse_metadata(CurrentSong, Ctx) ->
 	end.
 
 query_rating(DBCMP, Conn, Ctx) ->
-	case DBCMP#dbsong.key =:= {<<>>, <<>>, <<>>} of
+	case DBCMP#dbsong.key =:= {<<>>, <<>>, <<>>} orelse
+							not Ctx#spl.is_rating of
 	true  -> DBCMP;
 	false -> DBCMP#dbsong{rating=rating_for_uri(element(Ctx#spl.idx,
 						DBCMP#dbsong.uris), Conn)}

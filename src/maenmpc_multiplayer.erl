@@ -4,12 +4,12 @@
 -include_lib("maenmpc_db.hrl").
 
 -record(mpl, {
-	ui, alsa, mpd_list, mpd_active, mpd_ratings,
+	ui, alsa, mpd_list, mpd_active, %mpd_ratings, % TODO UNUSED MAY NEED IT TO EDIT RATING!
 	current_song, current_queue
 }).
 
 init([NotifyToUI]) ->
-	{ok, PrimaryRatings} = application:get_env(maenmpc, primary_ratings),
+	%{ok, PrimaryRatings} = application:get_env(maenmpc, primary_ratings),
 	{ok, MPDList}        = application:get_env(maenmpc, mpd),
 	{ok, ALSAHWInfo}     = application:get_env(maenmpc, alsa),
 	MPDFirst = m16, % TODO DEBUG ONLY
@@ -24,7 +24,7 @@ init([NotifyToUI]) ->
 		alsa          = ALSAHWInfo,
 		mpd_list      = MPDListIdx, % [{name, idx}]
 		mpd_active    = MPDFirst,
-		mpd_ratings   = PrimaryRatings,
+		%mpd_ratings   = PrimaryRatings,
 		current_song  = #dbsong{key={<<>>, <<>>, <<>>}},
 		current_queue = #queue{cnt=[], total=-1, qoffset=0, doffset=0,
 					dsel=0}
@@ -42,9 +42,8 @@ handle_cast({db_playing, Info}, Ctx) ->
 					Ctx#mpl.current_song#dbsong.key of
 			true  -> {Ctx, replace_song_info(Info,
 							Ctx#mpl.current_song)};
-			false -> NewSong = lists:foldl(fun(NameIdx, S) ->
-						complete_song_info(NameIdx, S,
-									Ctx)
+			false -> NewSong = lists:foldl(fun({Name, _Idx}, S) ->
+						complete_song_info(Name, S, Ctx)
 					end, SongInfo, Ctx#mpl.mpd_list),
 				 {Ctx#mpl{current_song=NewSong},
 					replace_song_info(Info, NewSong)}
@@ -88,28 +87,34 @@ replace_song_info(InfoIn, NewVal) ->
 		OtherEntry           -> OtherEntry
 	end || IE <- InfoIn].
 
-complete_song_info({Name, _Idx}, SongInfo, Ctx) ->
+complete_song_info(Name, SongInfo, Ctx) ->
 	case Name =:= Ctx#mpl.mpd_active of
 	true  -> SongInfo;
-	% TODO x RACE CONDITION? WHAT IF PLAYER DIES BETWEEN THESE LINES?
+	% TODO x RACE CONDITION? WHAT IF PLAYER DIES BETWEEN THESE LINES? / ALSO SHOULD PROBABLY DO ALL IN SINGLE TX WITH POSSIBILITY TO QUERY MULTIPLE KEYS AT ONCE!
 	false -> case call_singleplayer(Name, is_online) of
-		 true -> OtherInfo = call_singleplayer(Name, {query_by_key,
-							SongInfo#dbsong.key}),
-			 case OtherInfo#dbsong.key =:= SongInfo#dbsong.key of
-			 true ->  SongInfo#dbsong{
-				  uris   = merge_tuple(SongInfo#dbsong.uris,
-						OtherInfo#dbsong.uris),
-				  audios = merge_tuple(SongInfo#dbsong.audios,
-						OtherInfo#dbsong.audios),
-				  rating = case Name =:= Ctx#mpl.mpd_ratings of
-					   true  -> OtherInfo#dbsong.rating;
-					   false -> SongInfo#dbsong.rating
-					   end};
-			 false -> SongInfo
-			 end;
-		false -> SongInfo
+		true ->
+			[H|_T] = complete_song_info_other(Name, [SongInfo]),
+			H;
+		false ->
+			SongInfo
 		end
 	end.
+
+complete_song_info_other(Name, SongInfos) ->
+	OtherInfos = call_singleplayer(Name, {query_by_keys,
+			[SongInfo#dbsong.key || SongInfo <- SongInfos]}),
+	[case OtherInfo#dbsong.key =:= SongInfo#dbsong.key of
+		true -> SongInfo#dbsong{
+			uris   = merge_tuple(SongInfo#dbsong.uris,
+							OtherInfo#dbsong.uris),
+			audios = merge_tuple(SongInfo#dbsong.audios,
+							OtherInfo#dbsong.audios),
+			rating = case SongInfo#dbsong.rating of
+					-1   -> OtherInfo#dbsong.rating;
+					_Any -> SongInfo#dbsong.rating
+				end};
+		false -> SongInfo
+	end || {SongInfo, OtherInfo} <- lists:zip(SongInfos, OtherInfos)].
 
 % TODO x MAY BE NEEDLESSLY SLOW MIGHT BE FASTER TO USE ITERATION INDEX BASED APPROACH AND TUPLE SET VALUE?
 merge_tuple(T1, T2) ->
@@ -190,7 +195,7 @@ proc_range_result(RangeResult, ItemsRequested, Ctx) ->
 		QReq = min(ItemsRequested, PreCtx#mpl.current_queue#queue.total
 				- PreCtx#mpl.current_queue#queue.qoffset),
 		case QReq =< 0 of
-		true -> PreCtx;
+		true  -> PreCtx;
 		false -> append_queue(query_queue(QReq,
 				#queue{qoffset=QOffset}, PreCtx), PreCtx)
 		end;
@@ -199,11 +204,18 @@ proc_range_result(RangeResult, ItemsRequested, Ctx) ->
 	end.
 
 query_queue(ItemsRequested, QIn, Ctx) ->
-	RawResult = call_singleplayer(Ctx#mpl.mpd_active,
-					{query_queue, ItemsRequested, QIn}),
-	% TODO POST PROCESSING MAY BE REQUIRED HERE 
-	% TODO AUGMENT QUEUE WITH RATINGS / INFO FROM OTHER INSTANCE
-	RawResult.
+	InstancesToQuery = lists:filtermap(fun({Name, _Idx}) ->
+			case Name /= Ctx#mpl.mpd_active andalso
+					call_singleplayer(Name, is_online) of
+			true  -> {true, Name};
+			false -> false
+			end
+		end, Ctx#mpl.mpd_list),
+	PreliminaryQueue = call_singleplayer(Ctx#mpl.mpd_active, {query_queue,
+							ItemsRequested, QIn}),
+	PreliminaryQueue#queue{cnt=lists:foldl(fun complete_song_info_other/2,
+				PreliminaryQueue#queue.cnt, InstancesToQuery)}.
+	% TODO QUERY PLAY COUNT FOR CURRENTLY SELLECTED ONE! [NEED TO DO THIS ALSO IN in_range, ok cases...
 
 append_queue(NewQueue, Ctx) ->
 	OldQueue = Ctx#mpl.current_queue,

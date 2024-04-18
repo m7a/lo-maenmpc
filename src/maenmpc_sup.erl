@@ -7,11 +7,11 @@ start_link(CLIParams) ->
 	supervisor:start_link({local, ?SERVER}, ?MODULE, [CLIParams]).
 
 init([_CLIParams]) ->
-	{ok, MPDList} = application:get_env(maenmpc, mpd),
+	{ok, MPDList}        = application:get_env(maenmpc, mpd),
+	{ok, PrimaryRatings} = application:get_env(maenmpc, primary_ratings),
 	application:start(cecho),
 	Len = length(MPDList),
 	{ok, {#{strategy => one_for_all, intensity => 0, period => 1}, [
-		% TODO CHILD SPECS GO HERE
 		#{id => maenmpc_ui, start => {gen_server, start_link,
 				[{local, maenmpc_ui}, maenmpc_ui,
 				[maenmpc_multiplayer], []]}},
@@ -21,13 +21,13 @@ init([_CLIParams]) ->
 				[{local, maenmpc_multiplayer},
 				maenmpc_multiplayer, [maenmpc_ui], []]}}
 	] ++ lists:flatten([
-		generate_dynamic_entries(Name, Config, Idx, Len)
+		generate_dynamic_entries(Name, Config, Idx, Len, PrimaryRatings)
 	||
 		{{Name, Config}, Idx} <- lists:zip(MPDList,
 					lists:seq(1, length(MPDList)))
 	])}}.
 
-generate_dynamic_entries(Name, Config, Idx, Len) ->
+generate_dynamic_entries(Name, Config, Idx, Len, Ratings) ->
 	NameList     = atom_to_list(Name),
 	Singleplayer = list_to_atom("maenmpc_singleplayer_" ++ NameList),
 	SyncIdle     = list_to_atom("maenmpc_sync_idle_"    ++ NameList),
@@ -41,7 +41,8 @@ generate_dynamic_entries(Name, Config, Idx, Len) ->
 					{db,       maenmpc_multiplayer},
 					{syncidle, SyncIdle},
 					{idx,      Idx},
-					{len,      Len}
+					{len,      Len},
+					{rating,   Name =:= Ratings}
 				], []]}
 		},
 		#{
