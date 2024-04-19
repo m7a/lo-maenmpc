@@ -40,20 +40,31 @@ handle_cast({db_playing, Info}, Ctx) ->
 		SongInfo = proplists:get_value(x_maenmpc, Info),
 		{NewCtx, SendToUI} = case SongInfo#dbsong.key =:=
 					Ctx#mpl.current_song#dbsong.key of
-			true  -> {Ctx, replace_song_info(Info,
-							Ctx#mpl.current_song)};
-			false -> NewSong = lists:foldl(fun({Name, _Idx}, S) ->
+		true ->
+			{Ctx, replace_song_info(Info, Ctx#mpl.current_song)};
+		false ->
+			NewSong = lists:foldl(fun({Name, _Idx}, S) ->
 						complete_song_info(Name, S, Ctx)
 					end, SongInfo, Ctx#mpl.mpd_list),
-				 {Ctx#mpl{current_song=NewSong},
-					replace_song_info(Info, NewSong)}
-			end,
+			NCtx = Ctx#mpl{current_song=NewSong},
+			gen_server:cast(NCtx#mpl.ui, {db_queue,
+						NCtx#mpl.current_queue,
+						NewSong#dbsong.playlist_id}),
+			{NCtx, replace_song_info(Info, NewSong)}
+		end,
 		gen_server:cast(Ctx#mpl.ui, {db_playing,
 			[{x_maenmpc_alsa, query_alsa(Ctx#mpl.alsa)}|SendToUI]}),
 		NewCtx;
 	false ->
 		% Don't care what other players are playing...
 		Ctx
+	end};
+handle_cast({db_playlist_changed, Name}, Ctx) ->
+	{noreply, case Ctx#mpl.mpd_active =:= Name of
+	% Updated playlist is equal to out of range, because we cannot know if
+	% we are out of range or not...
+	true  -> proc_range_result(out_of_range, Ctx);
+	false -> Ctx
 	end};
 handle_cast(R={ui_simple, _A, _B}, Ctx) ->
 	call_singleplayer(Ctx#mpl.mpd_active, R),
@@ -62,7 +73,8 @@ handle_cast(R={ui_simple, _A}, Ctx) ->
 	call_singleplayer(Ctx#mpl.mpd_active, R),
 	{noreply, Ctx};
 handle_cast({ui_queue, ItemsRequested}, Ctx) ->
-	{noreply, check_range_and_proc(ItemsRequested, Ctx)};
+	{noreply, check_range_and_proc(Ctx#mpl{current_queue=
+		Ctx#mpl.current_queue#queue{last_query_len=ItemsRequested}})};
 handle_cast({ui_queue_scroll, Offset, ItemsRequested}, Ctx) ->
 	DOffset = Ctx#mpl.current_queue#queue.doffset,
 	NewDSEL = max(0, min(Ctx#mpl.current_queue#queue.total - 1,
@@ -73,8 +85,13 @@ handle_cast({ui_queue_scroll, Offset, ItemsRequested}, Ctx) ->
 					ItemsRequested, DOffset + Offset));
 		     false -> DOffset
 		     end,
-	{noreply, check_range_and_proc(ItemsRequested, Ctx#mpl{current_queue=
-	Ctx#mpl.current_queue#queue{dsel = NewDSEL, doffset = NewDOffset}})};
+	{noreply, check_range_and_proc(Ctx#mpl{current_queue=
+		Ctx#mpl.current_queue#queue{
+			dsel           = NewDSEL,
+			doffset        = NewDOffset,
+			last_query_len = ItemsRequested
+		}}
+	)};
 handle_cast({mpd_assign_error, Name, Reason}, Ctx) ->
 	gen_server:cast(Ctx#mpl.ui, {db_error, {offline, Name, Reason}}),
 	{noreply, Ctx};
@@ -149,19 +166,20 @@ query_alsa(ALSA) ->
 		[Rate, <<":__:">>, Chan]
 	end.
 
-check_range_and_proc(ItemsRequested, Ctx) ->
-	% TODO x could it make sense to inline the two functions?
-	proc_range_result(check_in_range(ItemsRequested, Ctx),
-							ItemsRequested, Ctx).
+check_range_and_proc(Ctx) ->
+	proc_range_result(check_in_range(Ctx), Ctx).
 
-check_in_range(R, Ctx) ->
+check_in_range(Ctx) ->
+	R       = Ctx#mpl.current_queue#queue.last_query_len,
 	Len     = length(Ctx#mpl.current_queue#queue.cnt),
 	DOffset = Ctx#mpl.current_queue#queue.doffset,
 	QOffset = Ctx#mpl.current_queue#queue.qoffset,
+	Total   = Ctx#mpl.current_queue#queue.total,
 	if
-	DOffset - QOffset >= R andalso Len - (DOffset + R) >= R ->
+	(DOffset - QOffset   >= R orelse QOffset       == 0) andalso
+	(Len - (DOffset + R) >= R orelse QOffset + Len == Total) ->
 		{in_range, ok};
-	DOffset - QOffset >= 0 andalso Len - (DOffset + R) >= 0 ->
+	DOffset - QOffset >= 0 andalso (QOffset + Len) - (DOffset + R) >= 0 ->
 		case DOffset - QOffset < R of
 		true  -> {in_range, query_before};
 		false -> {in_range, query_after}
@@ -170,10 +188,20 @@ check_in_range(R, Ctx) ->
 		out_of_range
 	end.
 
-proc_range_result(RangeResult, ItemsRequested, Ctx) ->
+proc_range_result(RangeResult, Ctx) ->
+	ItemsRequested = Ctx#mpl.current_queue#queue.last_query_len,
 	PreCtx = case RangeResult of
-		out_of_range -> Ctx#mpl{current_queue=query_queue(
-			ItemsRequested * 5, Ctx#mpl.current_queue, Ctx)};
+		out_of_range ->
+			DOffset = Ctx#mpl.current_queue#queue.doffset,
+			{QOffset, NumQuery} = case DOffset < 2 *
+							ItemsRequested of
+				true  -> {0, DOffset + 3 * ItemsRequested};
+				false -> {DOffset - 2 * ItemsRequested,
+							5 * ItemsRequested}
+			end,
+			Ctx#mpl{current_queue=query_queue(NumQuery,
+				Ctx#mpl.current_queue#queue{qoffset=QOffset},
+				Ctx)};
 		_Other1 -> Ctx
 		end,
 	gen_server:cast(PreCtx#mpl.ui, {db_queue, PreCtx#mpl.current_queue,
@@ -183,21 +211,21 @@ proc_range_result(RangeResult, ItemsRequested, Ctx) ->
 		PreCtx;
 	{in_range, query_before} when
 				PreCtx#mpl.current_queue#queue.qoffset > 0 ->
-		QOffset = max(0, PreCtx#mpl.current_queue#queue.qoffset
+		QOffset2 = max(0, PreCtx#mpl.current_queue#queue.qoffset
 							- ItemsRequested),
 		QReq = min(PreCtx#mpl.current_queue#queue.qoffset,
 							ItemsRequested),
-		append_queue(query_queue(QReq, #queue{qoffset=QOffset}, PreCtx),
-									PreCtx);
+		append_queue(query_queue(QReq, #queue{qoffset=QOffset2},
+							PreCtx), PreCtx);
 	{in_range, query_after} ->
-		QOffset = PreCtx#mpl.current_queue#queue.qoffset +
+		QOffset2 = PreCtx#mpl.current_queue#queue.qoffset +
 				length(PreCtx#mpl.current_queue#queue.cnt),
 		QReq = min(ItemsRequested, PreCtx#mpl.current_queue#queue.total
 				- PreCtx#mpl.current_queue#queue.qoffset),
 		case QReq =< 0 of
 		true  -> PreCtx;
 		false -> append_queue(query_queue(QReq,
-				#queue{qoffset=QOffset}, PreCtx), PreCtx)
+				#queue{qoffset=QOffset2}, PreCtx), PreCtx)
 		end;
 	_Other2 ->
 		PreCtx
