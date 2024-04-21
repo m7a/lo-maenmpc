@@ -4,7 +4,9 @@
 -include_lib("maenmpc_db.hrl").
 
 -record(mpl, {
-	ui, alsa, mpd_list, mpd_active, %mpd_ratings, % TODO UNUSED MAY NEED IT TO EDIT RATING!
+	ui, alsa, mpd_list, mpd_active,
+	%mpd_ratings, % TODO UNUSED MAY NEED IT TO EDIT RATING!
+	maloja_url, maloja_key,
 	current_song, current_queue
 }).
 
@@ -12,6 +14,7 @@ init([NotifyToUI]) ->
 	%{ok, PrimaryRatings} = application:get_env(maenmpc, primary_ratings),
 	{ok, MPDList}        = application:get_env(maenmpc, mpd),
 	{ok, ALSAHWInfo}     = application:get_env(maenmpc, alsa),
+	{ok, Maloja}         = application:get_env(maenmpc, maloja),
 	MPDFirst = m16, % TODO DEBUG ONLY
 	%[MPDFirst|_Others] = MPDList,
 	timer:send_interval(5000, interrupt_idle),
@@ -25,9 +28,11 @@ init([NotifyToUI]) ->
 		mpd_list      = MPDListIdx, % [{name, idx}]
 		mpd_active    = MPDFirst,
 		%mpd_ratings   = PrimaryRatings,
+		maloja_url    = proplists:get_value(url, Maloja, none),
+		maloja_key    = proplists:get_value(key, Maloja, none),
 		current_song  = #dbsong{key={<<>>, <<>>, <<>>}},
 		current_queue = #queue{cnt=[], total=-1, qoffset=0, doffset=0,
-					dsel=0}
+					dsel=0, last_query_len=0}
 	}}.
 
 handle_call(_Call, _From, Ctx) ->
@@ -107,7 +112,8 @@ replace_song_info(InfoIn, NewVal) ->
 complete_song_info(Name, SongInfo, Ctx) ->
 	case Name =:= Ctx#mpl.mpd_active of
 	true  -> SongInfo;
-	% TODO x RACE CONDITION? WHAT IF PLAYER DIES BETWEEN THESE LINES? / ALSO SHOULD PROBABLY DO ALL IN SINGLE TX WITH POSSIBILITY TO QUERY MULTIPLE KEYS AT ONCE!
+	% Race condition when player dies after this test, but there does not
+	% seem to be a real way around this issue in general.
 	false -> case call_singleplayer(Name, is_online) of
 		true ->
 			[H|_T] = complete_song_info_other(Name, [SongInfo]),
@@ -145,7 +151,7 @@ call_singleplayer(Name, Query) ->
 % $ cat /proc/asound/card0/pcm0p/sub0/hw_params
 % closed
 % $ cat /proc/asound/card0/pcm0p/sub0/hw_params
-% format: S32_LE                <- could use for format?
+% format: S32_LE                <- could use for format? TODO x
 % channels: 2                   <- channels
 % rate: 44100 (44100/1)         <- rate
 % ...
@@ -190,7 +196,7 @@ check_in_range(Ctx) ->
 
 proc_range_result(RangeResult, Ctx) ->
 	ItemsRequested = Ctx#mpl.current_queue#queue.last_query_len,
-	PreCtx = case RangeResult of
+	PreCtx = query_playcount(case RangeResult of
 		out_of_range ->
 			DOffset = Ctx#mpl.current_queue#queue.doffset,
 			{QOffset, NumQuery} = case DOffset < 2 *
@@ -203,7 +209,7 @@ proc_range_result(RangeResult, Ctx) ->
 				Ctx#mpl.current_queue#queue{qoffset=QOffset},
 				Ctx)};
 		_Other1 -> Ctx
-		end,
+		end),
 	gen_server:cast(PreCtx#mpl.ui, {db_queue, PreCtx#mpl.current_queue,
 				PreCtx#mpl.current_song#dbsong.playlist_id}),
 	case RangeResult of
@@ -231,6 +237,47 @@ proc_range_result(RangeResult, Ctx) ->
 		PreCtx
 	end.
 
+query_playcount(Ctx) when Ctx#mpl.maloja_url =:= none orelse
+				Ctx#mpl.current_queue#queue.cnt == [] ->
+	Ctx;
+query_playcount(Ctx) ->
+	DOffset = Ctx#mpl.current_queue#queue.dsel -
+					Ctx#mpl.current_queue#queue.qoffset,
+	Prefix = lists:sublist(Ctx#mpl.current_queue#queue.cnt, 1, DOffset),
+	[Sel|Suffix] = lists:nthtail(DOffset, Ctx#mpl.current_queue#queue.cnt),
+	case Sel#dbsong.playcount < 0 andalso
+					Sel#dbsong.key =/= {<<>>, <<>>, <<>>} of
+	true ->
+		Query = binary_to_list(iolist_to_binary(io_lib:format(
+			"~s/trackinfo?key=~s&trackartist=~s&title=~s", [
+				Ctx#mpl.maloja_url,
+				uri_string:quote(Ctx#mpl.maloja_key),
+				uri_string:quote(element(1, Sel#dbsong.key)),
+				uri_string:quote(element(3, Sel#dbsong.key))
+			]))),
+		{ok, {_Status, _Headers, InfoRaw}} = httpc:request(Query),
+		Map = jiffy:decode(InfoRaw, [return_maps]),
+		NewPC = case maps:get(<<"scrobbles">>, Map, -1) of
+		-1 ->
+			EDsc = maps:get(<<"error">>, Map, unknown),
+			case is_map(EDsc) andalso
+					maps:get(<<"type">>, EDsc, unknown) =:=
+					<<"entity_does_not_exist">> of
+			true  -> 0;
+			false -> gen_server:cast(Ctx#mpl.ui,
+						{db_error, {maloja, EDsc}}), -1
+			end;
+		Value1 -> Value1
+		end,
+		case NewPC of
+		-1    -> Ctx;
+		Value -> Ctx#mpl{current_queue=Ctx#mpl.current_queue#queue{cnt=
+				Prefix ++ [Sel#dbsong{playcount=Value}|Suffix]}}
+		end;
+	false ->
+		Ctx
+	end.
+
 query_queue(ItemsRequested, QIn, Ctx) ->
 	InstancesToQuery = lists:filtermap(fun({Name, _Idx}) ->
 			case Name /= Ctx#mpl.mpd_active andalso
@@ -243,7 +290,6 @@ query_queue(ItemsRequested, QIn, Ctx) ->
 							ItemsRequested, QIn}),
 	PreliminaryQueue#queue{cnt=lists:foldl(fun complete_song_info_other/2,
 				PreliminaryQueue#queue.cnt, InstancesToQuery)}.
-	% TODO QUERY PLAY COUNT FOR CURRENTLY SELLECTED ONE! [NEED TO DO THIS ALSO IN in_range, ok cases...
 
 append_queue(NewQueue, Ctx) ->
 	OldQueue = Ctx#mpl.current_queue,

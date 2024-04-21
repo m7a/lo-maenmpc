@@ -30,7 +30,7 @@ init(Properties) ->
 
 epsilon_song(Ctx) ->
 	EpsTPL = list_to_tuple(lists:duplicate(Ctx#spl.len, <<>>)),
-	#dbsong{key={<<>>, <<>>, <<>>}, uris=EpsTPL, playcount=0, rating=-1,
+	#dbsong{key={<<>>, <<>>, <<>>}, uris=EpsTPL, playcount=-1, rating=-1,
 			duration=1, year = <<>>, trackno=0, audios=EpsTPL,
 			playlist_id=-1}.
 
@@ -165,7 +165,7 @@ update_status(Status, Ctx) ->
 erlmpd_to_dbsong(Entry, Ctx) ->
 	#dbsong{key          = erlmpd_to_key(Entry),
 		uris         = new_tuple(proplists:get_value(file, Entry), Ctx),
-		playcount    = 0,
+		playcount    = -1,
 		rating       = ?RATING_UNRATED,
 		duration     = proplists:get_value('Time',  Entry, 1),
 		year         = proplists:get_value('Date',  Entry, <<>>),
