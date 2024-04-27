@@ -27,7 +27,7 @@ init([NotifyToDB]) ->
 	cecho:keypad(?ceSTDSCR, true),
 	{Height, Width} = cecho:getmaxyx(),
 	{ok, init_windows(#view{height = Height, width = Width,
-				db = NotifyToDB, cidx = 1, page = help})}.
+		db = NotifyToDB, cidx = 1, page = help}, "Initializing...")}.
 
 init_color_pairs() ->
 	cecho:init_pair(?CPAIR_DEFAULT,     ?ceCOLOR_WHITE,  ?ceCOLOR_BLACK),
@@ -38,7 +38,7 @@ init_color_pairs() ->
 	cecho:init_pair(?CPAIR_ACCENT2_SEL, ?ceCOLOR_BLACK,  ?ceCOLOR_CYAN),
 	cecho:init_pair(?CPAIR_ERROR,       ?ceCOLOR_RED,    ?ceCOLOR_BLACK).
 
-init_windows(Ctx0) ->
+init_windows(Ctx0, Status) ->
 	WW1 = max(0, Ctx0#view.width - 35),
 	WW2 = max(0, Ctx0#view.width - 21),
 	YW2 = max(0, Ctx0#view.height - 7),
@@ -55,7 +55,7 @@ init_windows(Ctx0) ->
 					max(0, Ctx0#view.height - 1), 0)
 	},
 	Ctx2 = wnd_static_draw(Ctx1),
-	cecho:mvwaddstr(Ctx2#view.wnd_status, 0, 0, "Initializing..."),
+	cecho:mvwaddstr(Ctx2#view.wnd_status, 0, 0, Status),
 	cecho:attroff(Ctx2#view.wnd_status, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
 	cecho:wrefresh(Ctx2#view.wnd_status),
 	Ctx2.
@@ -157,6 +157,7 @@ handle_cast({getch, Character}, Ctx) ->
 		?ceKEY_F(2)   -> ui_request(Ctx#view{page=queue},
 					{ui_queue, main_height(Ctx) - 1});
 		?ceKEY_F(10)  -> init:stop(0), Ctx;
+		?ceKEY_RESIZE -> ui_resize(Ctx);
 		_Any          -> Ctx
 	end};
 handle_cast({db_cidx, CIDX}, Ctx) ->
@@ -380,6 +381,19 @@ ui_scroll(Ctx, Offset) ->
 							main_height(Ctx) - 1});
 	_Other -> Ctx % scrolling currently not supported for other views
 	end.
+
+ui_resize(Ctx) ->
+	cecho:endwin(),
+	cecho:refresh(),
+	lists:foreach(fun(Window) ->
+				cecho:werase(Window),
+				cecho:delwin(Window)
+			end,
+			[Ctx#view.wnd_song, Ctx#view.wnd_card, Ctx#view.wnd_sel,
+				Ctx#view.wnd_sel_card, Ctx#view.wnd_main,
+				Ctx#view.wnd_status, Ctx#view.wnd_keys]),
+	{Height, Width} = cecho:getmaxyx(),
+	init_windows(Ctx#view{height=Height, width=Width}, "resized...").
 
 handle_info(_Message,    Context)         -> {noreply, Context}.
 code_change(_OldVersion, Context, _Extra) -> {ok,      Context}.
