@@ -156,6 +156,8 @@ handle_cast({getch, Character}, Ctx) ->
 		?ceKEY_PGUP   -> ui_scroll(Ctx, 1 - main_height(Ctx));
 		?ceKEY_F(2)   -> ui_request(Ctx#view{page=queue},
 					{ui_queue, main_height(Ctx) - 1});
+		?ceKEY_F(4)   -> ui_request(Ctx#view{page=list},
+					{ui_list, main_height(Ctx) - 1});
 		?ceKEY_F(10)  -> init:stop(0), Ctx;
 		?ceKEY_RESIZE -> ui_resize(Ctx);
 		_Any          -> Ctx
@@ -173,6 +175,11 @@ handle_cast({db_playing, SongAndStatus}, Ctx) ->
 handle_cast({db_queue, Queue, CurrentSongID}, Ctx) ->
 	{noreply, case Ctx#view.page =:= queue of
 		true  -> draw_queue(Ctx, Queue, CurrentSongID);
+		false -> Ctx
+	end};
+handle_cast({db_list, List}, Ctx) ->
+	{noreply, case Ctx#view.page =:= list of
+		true  -> draw_list(Ctx, List);
 		false -> Ctx
 	end};
 handle_cast(_Cast, Ctx) ->
@@ -313,17 +320,7 @@ draw_queue(Ctx, Queue, CurrentSongID) ->
 		IsCurrent = S#dbsong.playlist_id =:= CurrentSongID andalso
 							CurrentSongID /= -1,
 		IsSel = Queue#queue.doffset + Y - 1 =:= Queue#queue.dsel,
-		% TODO x EXTRACT FUNCTION MAYBE
-		Atts = case S#dbsong.uris of
-			{<<>>, <<>>} when IsSel -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT_SEL);
-			{<<>>, <<>>}            -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT);
-			{_Any, <<>>} when IsSel -> ?ceCOLOR_PAIR(?CPAIR_ACCENT1_SEL);
-			{_Any, <<>>}            -> ?ceCOLOR_PAIR(?CPAIR_ACCENT1);
-			{<<>>, _Any} when IsSel -> ?ceCOLOR_PAIR(?CPAIR_ACCENT2_SEL);
-			{<<>>, _Any}            -> ?ceCOLOR_PAIR(?CPAIR_ACCENT2);
-			_Other when IsSel       -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT_SEL);
-			_Other                  -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT)
-			end bor
+		Atts = uris_to_cpair(S, IsSel) bor
 			case IsCurrent of true -> ?ceA_BOLD; false -> 0 end,
 		cecho:attron(Ctx#view.wnd_main, Atts),
 		cecho:mvwaddstr(Ctx#view.wnd_main, Y, 0,
@@ -344,6 +341,18 @@ draw_queue(Ctx, Queue, CurrentSongID) ->
 	case SelVal of
 	none -> Ctx;
 	_Sel -> draw_sel(Ctx, SelVal)
+	end.
+
+uris_to_cpair(S, IsSel) ->
+	case S#dbsong.uris of
+	{<<>>, <<>>} when IsSel -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT_SEL);
+	{<<>>, <<>>}            -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT);
+	{_Any, <<>>} when IsSel -> ?ceCOLOR_PAIR(?CPAIR_ACCENT1_SEL);
+	{_Any, <<>>}            -> ?ceCOLOR_PAIR(?CPAIR_ACCENT1);
+	{<<>>, _Any} when IsSel -> ?ceCOLOR_PAIR(?CPAIR_ACCENT2_SEL);
+	{<<>>, _Any}            -> ?ceCOLOR_PAIR(?CPAIR_ACCENT2);
+	_Other when IsSel       -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT_SEL);
+	_Other                  -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT)
 	end.
 
 draw_scroll(Ctx, SHeight, SOffset, Y) ->
@@ -373,6 +382,67 @@ draw_sel(Ctx, S) ->
 			io_lib:format("playcount: ~w", [S#dbsong.playcount])),
 	cecho:attroff(Ctx#view.wnd_sel_card, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
 	cecho:wrefresh(Ctx#view.wnd_sel_card),
+	Ctx.
+
+% -record(slist, {cnt, artists, dsong, ssong, last_query_len}).
+% TODO CSTAT DRAW SCROLL / IMPLEMENT SCROLL ACTION
+draw_list(Ctx, List) ->
+	cecho:werase(Ctx#view.wnd_main),
+	WT = max(1, Ctx#view.width - 15),
+	% TODO PREEL + artists list partiton < artists[0] .. sum(artists) [or artists corrected with db entries] -> SCROLL...
+	{_PreEl, HasFound, DrawFrom0} = lists:foldl(
+		fun(EL, {I, HasFound, LELM}) ->
+			case HasFound orelse EL#dbsong.key =:=
+							List#slist.dsong of
+			true  -> {I,     true,  [EL|LELM]};
+			false -> {I + 1, false, []}
+			end
+		end, {0, false, []}, List#slist.cnt),
+	DrawFrom1 = case HasFound of
+			true  -> lists:reverse(DrawFrom0);
+			false -> List#slist.cnt
+		end,
+	MaxDraw = max(0, main_height(Ctx)),
+	{_DY, _LK} = lists:foldl(fun({S, Y}, {DeltaY, CurrentKey}) ->
+		case Y + DeltaY >= MaxDraw of
+		true ->
+			{DeltaY, CurrentKey};
+		false ->
+			NewKey = S#dbsong.key,
+			{DYN, CKN} = case element(1, NewKey) =:=
+						element(1, CurrentKey) andalso
+				element(2, NewKey) =:= element(2, CurrentKey) of
+			true ->
+				{DeltaY, NewKey};
+			false ->
+				% New key, draw something in addition
+				AttsD = ?ceCOLOR_PAIR(?CPAIR_DEFAULT) bor
+					?ceA_BOLD,
+				cecho:attron(Ctx#view.wnd_main, AttsD),
+				cecho:mvwaddstr(Ctx#view.wnd_main, Y + DeltaY,
+					0, io_lib:format("~s (~s): ~s",
+					[element(1, NewKey), S#dbsong.year,
+					element(2, NewKey)])),
+				cecho:attroff(Ctx#view.wnd_main, AttsD),
+				% TODO SCROLL!
+				{DeltaY + 1, NewKey}
+			end,
+			IsSel = List#slist.ssong =:= CKN,
+			Atts = uris_to_cpair(S, IsSel),
+			cecho:attron(Ctx#view.wnd_main, Atts),
+			cecho:mvwaddstr(Ctx#view.wnd_main, Y + DYN, 2,
+				io_lib:format("~2..0w  ~s  ~2..0w:~2..0w",
+				[S#dbsong.trackno, utf8pad(WT, element(3, CKN)),
+				S#dbsong.duration div 60,
+				S#dbsong.duration rem 60])),
+			cecho:attroff(Ctx#view.wnd_main, Atts),
+			% TODO DRAW SCROLL
+			%draw_scroll(Ctx, SHeight, SOffset, Y),
+			{DYN, CKN}
+		end
+	end, {0, {<<>>,<<>>,<<>>}}, lists:zip(DrawFrom1,
+					lists:seq(0, length(DrawFrom1) - 1))),
+	cecho:wrefresh(Ctx#view.wnd_main),
 	Ctx.
 
 ui_scroll(Ctx, Offset) ->

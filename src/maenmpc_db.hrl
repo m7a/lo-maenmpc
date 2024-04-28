@@ -16,3 +16,10 @@
 -record(queue, {cnt, total, qoffset, doffset, dsel, last_query_len}).
 -type queue() :: #queue{cnt::[dbsong()], total::integer(), qoffset::integer(),
 		doffset::integer(), last_query_len::integer()}.
+
+% results := {count1, count2}
+% qartist := lists:first(cnt).name
+% dsong, ssong := {<<>>,<<>>,<<>>}
+% cnt := [{artist, [list]}, {artist, [list]}]...
+-record(sartist, {name, results, minsz, knownsz}).
+-record(slist, {cnt, artists, dsong, ssong, last_query_len}).

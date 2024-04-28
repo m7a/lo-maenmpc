@@ -7,7 +7,7 @@
 	ui, alsa, mpd_list, mpd_active,
 	%mpd_ratings, % TODO UNUSED MAY NEED IT TO EDIT RATING!
 	maloja_url, maloja_key,
-	current_song, current_queue
+	current_song, current_queue, current_list
 }).
 
 init([NotifyToUI]) ->
@@ -32,7 +32,11 @@ init([NotifyToUI]) ->
 		maloja_key    = proplists:get_value(key, Maloja, none),
 		current_song  = #dbsong{key={<<>>, <<>>, <<>>}},
 		current_queue = #queue{cnt=[], total=-1, qoffset=0, doffset=0,
-					dsel=0, last_query_len=0}
+					dsel=0, last_query_len=0},
+		current_list  = #slist{cnt=[], artists=[],
+					dsong={<<>>,<<>>,<<>>},
+					ssong={<<>>,<<>>,<<>>},
+					last_query_len=0}
 	}}.
 
 handle_call(_Call, _From, Ctx) ->
@@ -97,6 +101,13 @@ handle_cast({ui_queue_scroll, Offset, ItemsRequested}, Ctx) ->
 			last_query_len = ItemsRequested
 		}}
 	)};
+handle_cast({ui_list, ItemsRequested}, Ctx) ->
+	CtxN = Ctx#mpl{current_list=Ctx#mpl.current_list#slist{
+					last_query_len=ItemsRequested}},
+	{noreply, case CtxN#mpl.current_list#slist.artists == [] of
+		true  -> query_list_new(CtxN);
+		false -> query_list_inc(CtxN)
+	end};
 handle_cast({mpd_assign_error, Name, Reason}, Ctx) ->
 	gen_server:cast(Ctx#mpl.ui, {db_error, {offline, Name, Reason}}),
 	{noreply, Ctx};
@@ -127,17 +138,19 @@ complete_song_info_other(Name, SongInfos) ->
 	OtherInfos = call_singleplayer(Name, {query_by_keys,
 			[SongInfo#dbsong.key || SongInfo <- SongInfos]}),
 	[case OtherInfo#dbsong.key =:= SongInfo#dbsong.key of
-		true -> SongInfo#dbsong{
-			uris   = merge_tuple(SongInfo#dbsong.uris,
-							OtherInfo#dbsong.uris),
-			audios = merge_tuple(SongInfo#dbsong.audios,
-							OtherInfo#dbsong.audios),
-			rating = case SongInfo#dbsong.rating of
-					-1   -> OtherInfo#dbsong.rating;
-					_Any -> SongInfo#dbsong.rating
-				end};
+		true  -> merge_song_info(SongInfo, OtherInfo);
 		false -> SongInfo
 	end || {SongInfo, OtherInfo} <- lists:zip(SongInfos, OtherInfos)].
+
+merge_song_info(Song, Other) ->
+	Song#dbsong{
+		uris   = merge_tuple(Song#dbsong.uris, Other#dbsong.uris),
+		audios = merge_tuple(Song#dbsong.audios, Other#dbsong.audios),
+		rating = case Song#dbsong.rating of
+				-1   -> Other#dbsong.rating;
+				_Any -> Song#dbsong.rating
+			end
+	}.
 
 % TODO x MAY BE NEEDLESSLY SLOW MIGHT BE FASTER TO USE ITERATION INDEX BASED APPROACH AND TUPLE SET VALUE?
 merge_tuple(T1, T2) ->
@@ -305,6 +318,143 @@ append_queue(NewQueue, Ctx) ->
 			total   = NewQueue#queue.total
 		}
 	end}.
+
+query_list_new(Ctx) ->
+	% TODO x FILTER SUPPORT COULD BE ADDED HERE
+	% by default filter songs without any info
+	Filter = {lnot, {land, [{tagop, artist, eq, ""},
+				{tagop, album,  eq, ""},
+				{tagop, title,  eq, ""}]}},
+	Artists = merge_artists([call_singleplayer(Name, {query_artists_count,
+				Filter}) || {Name, _Idx} <- Ctx#mpl.mpd_list]),
+	CtxRV = case Artists of
+	% When nothing is found at all there is nothing to do...
+	[] ->
+		Ctx;
+	[H|_T] ->
+		List0 = Ctx#mpl.current_list#slist{cnt=[], artists=Artists},
+		DArtist0 = element(1, List0#slist.dsong),
+		{List1, DArtist1} =
+			case lists:any(fun(X) -> DArtist0 =:= X#sartist.name
+						end, List0#slist.artists) of
+			true  -> {List0, DArtist0};
+			false -> {List0#slist{dsong={<<>>,<<>>,<<>>}},
+								H#sartist.name}
+			end,
+		QList = dartist_to_qlist(List1, DArtist1,
+						List0#slist.last_query_len),
+		query_list_artists(QList, Filter, Ctx#mpl{current_list=
+				Ctx#mpl.current_list#slist{artists = Artists}})
+	end,
+	gen_server:cast(CtxRV#mpl.ui, {db_list, CtxRV#mpl.current_list}),
+	CtxRV.
+
+dartist_to_qlist(List, DArtist, NumQuery) ->
+	{Prefix, Suffix} = lists:splitwith(fun(LE) ->
+			LE#sartist.name =< DArtist end, List#slist.artists),
+	{NumPre, SelPre} = lists:foldr(fun(EL, ValList) ->
+				count_lim(NumQuery, EL, ValList)
+			end, {0, []}, Prefix),
+	NumREM = NumQuery * 3 - min(NumPre, NumQuery),
+	{_NumPost, SelPost} = lists:foldl(fun(EL, ValList) ->
+				count_lim(NumREM, EL, ValList)
+			end, {0, []}, Suffix),
+	SelPre ++ lists:reverse(SelPost).
+
+count_lim(Lim, EL, {Val, List}) ->
+	case Val > Lim of
+	true  -> {Val,                    List};
+	false -> {Val + EL#sartist.minsz, [EL|List]}
+	end.
+
+merge_artists(ArtistsRaw) ->
+	merge_by_criterion(
+		ArtistsRaw,
+		fun(Propl) -> proplists:get_value('Artist', Propl) end,
+		0,
+		fun(Propl) -> proplists:get_value(songs, Propl) end,
+		fun(Sel, Vals) -> #sartist{name=Sel,
+			results=list_to_tuple(Vals), minsz=lists:max(Vals),
+			knownsz=-1} end
+	).
+	%Heads = [case X of [] -> empty; [H|_T] -> H end || X <- ArtistsRaw],
+	%NonEmptyHeads = lists:filter(fun(X) -> X =/= empty end, Heads),
+	%case NonEmptyHeads =:= [] of
+	%true ->
+	%	% Terminate
+	%	[];
+	%false ->
+	%	Artists = [proplists:get_value('Artist', List) ||
+	%						List <- NonEmptyHeads],
+	%	[SelArtist|_OtherArtists] = lists:sort(Artists),
+	%	{Counts, Tails} = lists:unzip([case X of
+	%		[] ->
+	%			{0, X};
+	%		[H|T] ->
+	%			case proplists:get_value('Artist', H) =:=
+	%							SelArtist of
+	%			true  -> {proplists:get_value(songs, H), T};
+	%			false -> {0, X}
+	%			end
+	%	end || X <- ArtistsRaw]),
+	%	[#sartist{name=SelArtist,results=list_to_tuple(Counts),
+	%				minsz=lists:max(Counts),
+	%				knownsz=-1}|merge_artists(Tails)]
+	%end.
+
+merge_by_criterion(ListRaw, GetKeyCB, Epsilon, ExtractCB, FinalizeCB) ->
+	Heads = [case X of [] -> empty; [H|_T] -> H end || X <- ListRaw],
+	NonEmptyHeads = lists:filter(fun(X) -> X =/= empty end, Heads),
+	case NonEmptyHeads =:= [] of
+	true ->
+		[]; % Terminate on empty
+	false ->
+		Keys = [GetKeyCB(List) || List <- NonEmptyHeads],
+		[Sel|_Other] = lists:sort(Keys),
+		{Vals, Tails} = lists:unzip([case X of
+				[] -> {Epsilon, X};
+				[H|T] ->
+					case GetKeyCB(H) =:= Sel of
+					true  -> {ExtractCB(H), T};
+					false -> {Epsilon, X}
+					end
+				end || X <- ListRaw]),
+		[FinalizeCB(Sel, Vals)|merge_by_criterion(
+			Tails, GetKeyCB, Epsilon, ExtractCB, FinalizeCB)]
+	end.
+
+query_list_artists(QList, Filter, Ctx) ->
+	SongsDeep = [call_singleplayer(Name, {query_artists,
+				[EL#sartist.name || EL <- QList], Filter})
+			|| {Name, _Idx} <- Ctx#mpl.mpd_list],
+	NewCnt = merge_songs(lists:append(SongsDeep)),
+	OldList = Ctx#mpl.current_list,
+	Ctx#mpl{current_list=OldList#slist{
+			% --
+			cnt   = NewCnt,
+			dsong = case OldList#slist.dsong of
+				{<<>>,<<>>,<<>>} when length(NewCnt) > 0 ->
+					[H|_T2] = NewCnt,
+					H#dbsong.key;
+				Other ->
+					Other
+				end
+	}}.
+
+merge_songs(SongsRaw) ->
+	merge_by_criterion(
+		SongsRaw,
+		fun(Song) -> Song#dbsong.key end,
+		skip,
+		fun(H) -> H end,
+		fun(_Key, Vals) ->
+			[VH|VT] = lists:filter(fun(X) -> X =/= skip end, Vals),
+			lists:foldl(fun merge_song_info/2, VH, VT)
+		end
+	).
+
+query_list_inc(Ctx) ->
+	Ctx.
 
 handle_info(interrupt_idle, Ctx) ->
 	call_singleplayer(Ctx#mpl.mpd_active, request_update),

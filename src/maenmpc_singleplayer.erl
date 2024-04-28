@@ -26,10 +26,10 @@ init(Properties) ->
 		mpd_consume = false,
 		mpd_xfade   = 0
 	},
-	{ok, InitialState#spl{current_song = epsilon_song(InitialState)}}.
+	{ok, InitialState#spl{current_song=epsilon_song(InitialState#spl.len)}}.
 
-epsilon_song(Ctx) ->
-	EpsTPL = list_to_tuple(lists:duplicate(Ctx#spl.len, <<>>)),
+epsilon_song(NumPlayers) ->
+	EpsTPL = list_to_tuple(lists:duplicate(NumPlayers, <<>>)),
 	#dbsong{key={<<>>, <<>>, <<>>}, uris=EpsTPL, playcount=-1, rating=-1,
 			duration=1, year = <<>>, trackno=0, audios=EpsTPL,
 			playlist_id=-1}.
@@ -70,12 +70,12 @@ handle_call({query_by_keys, Keys}, _From, Ctx) ->
 					{tagop, title,  eq, element(3, Key)}]})
 		of
 		% nothing assigned
-		[] -> epsilon_song(Ctx);
+		[] -> epsilon_song(Ctx#spl.len);
 		% Single element found -- assign it!
 		[Element|[]] -> query_rating(parse_metadata(Element, Ctx),
 								Conn, Ctx);
 		% result not unique - cannot safely assign
-		[_Element|_Others] -> epsilon_song(Ctx)
+		[_Element|_Others] -> epsilon_song(Ctx#spl.len)
 		% else error is fatal because the connection state may
 		% be disrupted.
 		end || Key <- Keys]
@@ -110,6 +110,17 @@ handle_call({query_queue, ItemsRequested, CurrentQ}, _From, Ctx) ->
 		}, Ctx1}
 	end),
 	{reply, NewQ, Ctx2};
+handle_call({query_artists_count, Filter}, _From, Ctx) ->
+	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
+		erlmpd:count_group(Conn, artist, Filter)
+	end), Ctx};
+handle_call({query_artists, QList, Filter}, _From, Ctx) ->
+	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
+		[[query_rating(parse_metadata(El, Ctx), Conn, Ctx)
+			|| El <- erlmpd:find(Conn, {land,
+					[Filter, {tagop, artist, eq, Artist}]})]
+		|| Artist <- QList]
+	end), Ctx};
 % TODO ALL OTHER INTERACTIVE FUNCTION STUFF GOES HERE...
 handle_call(_Call, _From, Ctx) ->
 	{reply, ok, Ctx}.
@@ -134,7 +145,7 @@ update_playing_info(Name, Conn, Ctx) ->
 
 parse_metadata(CurrentSong, Ctx) ->
 	case proplists:get_value(file, CurrentSong) of
-	undefined -> epsilon_song(Ctx);
+	undefined -> epsilon_song(Ctx#spl.len);
 	_ValidVal -> erlmpd_to_dbsong(CurrentSong, Ctx)
 	end.
 
