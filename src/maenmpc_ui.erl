@@ -306,16 +306,8 @@ draw_queue(Ctx, Queue, CurrentSongID) ->
 	MaxDraw = max(0, main_height(Ctx) - 1),
 	DrawItems = lists:sublist(Queue#queue.cnt,
 			Queue#queue.doffset - Queue#queue.qoffset + 1, MaxDraw),
-	SHeight = max(1, min(MaxDraw, MaxDraw * MaxDraw div
-						max(1, Queue#queue.total))),
-	% TODO x CONVOLUTED BUT WORKS
-	SOffset = case 1 + (Queue#queue.doffset * MaxDraw div
-						max(Queue#queue.total, 1)) of
-		1 when Queue#queue.doffset /= 0 -> 2;
-		Value when Queue#queue.doffset + MaxDraw < Queue#queue.total ->
-			min(Value, max(0, MaxDraw - SHeight - 1));
-		Value -> Value
-		end,
+	{SHeight, SOffset} = scroll_offset_height(Queue#queue.doffset,
+						Queue#queue.total, MaxDraw, 1),
 	SelVal = lists:foldl(fun({S, Y}, SelIn) ->
 		IsCurrent = S#dbsong.playlist_id =:= CurrentSongID andalso
 							CurrentSongID /= -1,
@@ -342,6 +334,19 @@ draw_queue(Ctx, Queue, CurrentSongID) ->
 	none -> Ctx;
 	_Sel -> draw_sel(Ctx, SelVal)
 	end.
+
+scroll_offset_height(DOffset, Total, MaxDraw, DY) ->
+	SHeight = max(1, min(MaxDraw, MaxDraw * MaxDraw div max(1, Total))),
+	% TODO x CONVOLUTED BUT WORKS
+	SOffset = case DY + (DOffset * MaxDraw div max(Total, 1)) of
+			DY when DOffset /= 0 ->
+				DY + 1;
+			Value when DOffset + MaxDraw < Total ->
+				min(Value, max(0, MaxDraw - SHeight - 1));
+			Value ->
+				Value
+		end,
+	{SHeight, SOffset}.
 
 uris_to_cpair(S, IsSel) ->
 	case S#dbsong.uris of
@@ -384,12 +389,10 @@ draw_sel(Ctx, S) ->
 	cecho:wrefresh(Ctx#view.wnd_sel_card),
 	Ctx.
 
-% -record(slist, {cnt, artists, dsong, ssong, last_query_len}).
-% TODO CSTAT DRAW SCROLL / IMPLEMENT SCROLL ACTION
+% TODO CSTAT IMPLEMENT SCROLL ACTION
 draw_list(Ctx, List) ->
 	cecho:werase(Ctx#view.wnd_main),
 	WT = max(1, Ctx#view.width - 15),
-	% TODO PREEL + artists list partiton < artists[0] .. sum(artists) [or artists corrected with db entries] -> SCROLL...
 	{_PreEl, HasFound, DrawFrom0} = lists:foldl(
 		fun(EL, {I, HasFound, LELM}) ->
 			case HasFound orelse EL#dbsong.key =:=
@@ -403,6 +406,9 @@ draw_list(Ctx, List) ->
 			false -> List#slist.cnt
 		end,
 	MaxDraw = max(0, main_height(Ctx)),
+	{SBefore, SIn, SAfter} = slist_to_scroll_info(List, MaxDraw),
+	{SHeight, SOffset} = scroll_offset_height(SBefore,
+					SBefore + SIn + SAfter, MaxDraw, 0),
 	{_DY, _LK} = lists:foldl(fun({S, Y}, {DeltaY, CurrentKey}) ->
 		case Y + DeltaY >= MaxDraw of
 		true ->
@@ -424,7 +430,7 @@ draw_list(Ctx, List) ->
 					[element(1, NewKey), S#dbsong.year,
 					element(2, NewKey)])),
 				cecho:attroff(Ctx#view.wnd_main, AttsD),
-				% TODO SCROLL!
+				draw_scroll(Ctx, SHeight, SOffset, Y + DeltaY),
 				{DeltaY + 1, NewKey}
 			end,
 			IsSel = List#slist.ssong =:= CKN,
@@ -436,14 +442,74 @@ draw_list(Ctx, List) ->
 				S#dbsong.duration div 60,
 				S#dbsong.duration rem 60])),
 			cecho:attroff(Ctx#view.wnd_main, Atts),
-			% TODO DRAW SCROLL
-			%draw_scroll(Ctx, SHeight, SOffset, Y),
+			draw_scroll(Ctx, SHeight, SOffset, Y + DYN),
 			{DYN, CKN}
 		end
 	end, {0, {<<>>,<<>>,<<>>}}, lists:zip(DrawFrom1,
 					lists:seq(0, length(DrawFrom1) - 1))),
 	cecho:wrefresh(Ctx#view.wnd_main),
 	Ctx.
+
+% -- begin overly complicated scroll auxiliary routine --
+% {before, in, after}
+% TODO x this monstrosity may be worth simplifying, use more folds and less
+%        explicit recursion... Maybe we can make use of the fact that we only
+%        really want to know SBefore and STotal values since scrolling just
+%        takes MaxDraw as the “height” input?
+slist_to_scroll_info(SL, NumDraw) ->
+	slist_to_scroll_info(SL#slist{last_query_len=NumDraw}, before_cnt,
+								{0, 0, 0}).
+% at any point in time terminate when no artists left to process
+slist_to_scroll_info(SL, _Any, Stats) when SL#slist.artists =:= [] ->
+	Stats;
+% terminate when we have processed all known-countable input
+slist_to_scroll_info(SL, _Any, Stats) when SL#slist.cnt =:= [] ->
+	lists:foldl(fun(Artist, {Pre, In, Post}) ->
+			{Pre, In, Post + Artist#sartist.minsz}
+		end, Stats, SL#slist.artists);
+slist_to_scroll_info(SL, before_cnt, Stats={Pre, In, Post}) ->
+	[HA|TA] = SL#slist.artists,
+	[CH|_CT] = SL#slist.cnt,
+	case HA#sartist.name =:= element(1, CH#dbsong.key) of
+	true  -> slist_to_scroll_info(SL, in_cnt_pre, Stats);
+	false -> slist_to_scroll_info(SL#slist{artists=TA},
+					{Pre + HA#sartist.minsz, In, Post})
+	end;
+slist_to_scroll_info(SL, in_cnt_pre, Stats={Pre, In, Post}) ->
+	[CH|CT] = SL#slist.cnt,
+	case SL#slist.dsong =:= CH#dbsong.key orelse
+		(element(1, SL#slist.dsong) =:= element(1, CH#dbsong.key)
+		andalso
+		element(2, SL#slist.dsong) =:= element(2, CH#dbsong.key)) of
+	true  -> slist_to_scroll_info(SL, in_draw, Stats);
+	false -> slist_to_scroll_info(SL#slist{cnt=CT},
+					in_cnt_pre, {Pre + 1, In, Post})
+	end;
+slist_to_scroll_info(SL, in_draw, {Pre, In, Post})
+					when SL#slist.last_query_len =:= 0 ->
+	slist_to_scroll_info(SL#slist{cnt=[]}, after_cnt,
+			{Pre, In, Post + length(SL#slist.cnt)});
+slist_to_scroll_info(SL, in_draw, Stats) ->
+	[CH|_CT] = SL#slist.cnt,
+	{SL2, {Pre2, In2, Post2}} = slist_to_scroll_info_draw_artist(
+			SL#slist{last_query_len=SL#slist.last_query_len - 1},
+			Stats, element(1, CH#dbsong.key)),
+	slist_to_scroll_info(SL2#slist{cnt=[]}, after_cnt,
+			{Pre2, In2, Post2 + length(SL2#slist.cnt)}).
+slist_to_scroll_info_draw_artist(SL, Stats, _Artist) when
+		SL#slist.last_query_len =:= 0 orelse SL#slist.cnt =:= [] ->
+	{SL, Stats};
+slist_to_scroll_info_draw_artist(SL, Stats={Pre, In, Post}, Artist) ->
+	Count = SL#slist.last_query_len - 1,
+	[CH|CT] = SL#slist.cnt,
+	NewArtist = element(1, CH#dbsong.key),
+	case NewArtist =:= Artist of
+	true  -> slist_to_scroll_info_draw_artist(SL#slist{cnt=CT,
+			last_query_len=Count}, {Pre, In + 1, Post}, Artist);
+	false -> slist_to_scroll_info_draw_artist(SL#slist{
+			last_query_len=Count}, Stats, NewArtist)
+	end.
+% -- end overly complicated scroll auxiliary routine --
 
 ui_scroll(Ctx, Offset) ->
 	case Ctx#view.page of

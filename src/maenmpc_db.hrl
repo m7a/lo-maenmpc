@@ -20,6 +20,6 @@
 % results := {count1, count2}
 % qartist := lists:first(cnt).name
 % dsong, ssong := {<<>>,<<>>,<<>>}
-% cnt := [{artist, [list]}, {artist, [list]}]...
+% artists := list of sartist | [{artist, [list]}, {artist, [list]}]...
 -record(sartist, {name, results, minsz, knownsz}).
 -record(slist, {cnt, artists, dsong, ssong, last_query_len}).
