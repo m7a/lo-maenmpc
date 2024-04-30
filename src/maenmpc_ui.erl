@@ -513,8 +513,9 @@ slist_to_scroll_info_draw_artist(SL, Stats={Pre, In, Post}, Artist) ->
 
 ui_scroll(Ctx, Offset) ->
 	case Ctx#view.page of
-	queue -> ui_request(Ctx, {ui_queue_scroll, Offset,
+	queue  -> ui_request(Ctx, {ui_queue_scroll, Offset,
 							main_height(Ctx) - 1});
+	list   -> ui_request(Ctx, {ui_list_scroll, Offset, main_height(Ctx)});
 	_Other -> Ctx % scrolling currently not supported for other views
 	end.
 
