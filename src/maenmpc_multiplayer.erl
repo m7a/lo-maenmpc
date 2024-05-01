@@ -462,101 +462,61 @@ ui_list_scroll(Offset, ItemsRequested, Ctx0) ->
 	{Result, _Before, After} =
 		% TODO USE SSONG RATHER THAN DSONG?
 		find_offset_offset_song(abs(Offset),
-			Ctx1#mpl.current_list#slist.dsong, SearchCnt, 0),
+			Ctx1#mpl.current_list#slist.ssong, SearchCnt, 0),
 	case Result of
 	out_of_range_detached ->
-		% TODO EXPERIMENTAL - IF WE JUMPED JUST JUMP TO THE ARTIST AND IGNORE THE SCROLL REQUEST FOR NOW
+		% TODO EXPERIMENTAL - IF WE JUMPED JUST JUMP TO THE ARTIST AND IGNORE THE SCROLL REQUEST FOR NOW - THIS IS WRONG BECAUSE IT DOES NOT HONOR THE UISER REQUEST! / MAYBE MAKE USE OF THE CODE FOUND BELOW RESULTFOUND PART...
 		query_list_inc(Ctx1);
 	out_of_range_adjacent ->
-		NumToGo = ItemsRequested - After,
-		case Offset < 0 of
-		true ->
-			% Query before (TODO WHAT IF CNT IS EMPTY? - NEED TO HANDLE CASE OR PROVE THAT IT CANNOT OCCUR)
-			[BeforeIt|_T] = Ctx1#mpl.current_list#slist.cnt,
-			BeforeArtist = element(1, BeforeIt#dbsong.key),
-			{BeforeArtists, _InAfter} =
-				maenmpc_util:divide_list_by_pred(
-				fun(Artist) ->
-					Artist#sartist.name =:= BeforeArtist
-				end, Ctx1#mpl.current_list#slist.artists),
-			% TODO REVERSE OF REVERSE MADNESS, MERGE THEM FOR EFFICIENCY AND BETTER UNDERSTANDING
-			ToQuery = lists:reverse(assemble_artists(
-					lists:reverse(BeforeArtists), NumToGo +
-					2 * ItemsRequested, [])),
-			Songs = query_list_artists_songs(ToQuery, Ctx1),
-			NewSong = case length(Songs) > NumToGo of
-			true ->
-				% Not at the edge, reverse lookup in songs the
-				% missing number
-				lists:nth(length(Songs) - NumToGo, Songs);
-			false when Songs =:= [] ->
-				[SH|_ST] = Ctx1#mpl.current_list#slist.cnt,
-				SH;
-			false ->
-				% At the edge we select the “last” song which
-				% is effectively the first one in the result.
-				[SH|_ST] = Songs,
-				SH
-			end,
-			List1 = Ctx1#mpl.current_list#slist{
-				dsong = NewSong#dbsong.key,
-				ssong = NewSong#dbsong.key,
-				cnt   = Songs ++ Ctx1#mpl.current_list#slist.cnt
-			},
-			gen_server:cast(Ctx1#mpl.ui, {db_list, List1}),
-			Ctx1#mpl{current_list=List1};
-		false ->
-			% Query after
-			SAE = lists:last(Ctx1#mpl.current_list#slist.cnt),
-			AfterArtist = element(1, SAE#dbsong.key),
-			% TODO WHAT IF EMTPY ETC, does below case catch all the
-			% relevant results?
-			{_BeforeIt, [_Incl|AfterArtists]} =
-				maenmpc_util:divide_list_by_pred(fun(Artist) ->
-					Artist#sartist.name =:= AfterArtist
-				end, Ctx1#mpl.current_list#slist.artists),
-			ToQuery = assemble_artists(AfterArtists, NumToGo +
-							3 * ItemsRequested, []),
-			case AfterArtists =:= [] orelse ToQuery =:= [] of
-			true ->
-				% At the edge select the last in CNT
-				Ctx1#mpl{current_list=
-					Ctx1#mpl.current_list#slist{
-						dsong=SAE#dbsong.key,
-						ssong=SAE#dbsong.key}};
-			false ->
-				Songs = query_list_artists_songs(ToQuery, Ctx1),
-				NewSong = case length(Songs) > NumToGo of
-				true  -> lists:nth(NumToGo, Songs);
-				% edge = select last
-				false -> lists:last(Songs)
-				end,
-				NewCnt = Ctx1#mpl.current_list#slist.cnt ++
-									Songs,
-				% TODO INACCURATE W/O DUMMY ENTRIES
-				DSong = lists:nth(max(1, length(NewCnt) -
-						ItemsRequested), NewCnt),
-				List1 = Ctx1#mpl.current_list#slist{
-					dsong = DSong#dbsong.key,
-					ssong = NewSong#dbsong.key,
-					cnt   = NewCnt
-				},
-				gen_server:cast(Ctx1#mpl.ui, {db_list, List1}),
-				Ctx1#mpl{current_list=List1}
-			end
-		end;
-	_ResultFound ->
-		% TODO CSTAT WE ARE AT A LIMIT HERE. TO SCROLL CORRECTLY, MUST CHANGE DSONG AND SSONG. THIS IS ONLY POSSIBLE IF THE DISTANCE BETWEEN THEM TWO IS WELL KNOWN AND WELL-COMPUTABLE, THOUGH. EITHER MODEL THE “ARTIST SEPARATION” IN THE COUNTING “find_offset_offset_song” OR GENERATE DUMMY SONGS AS ALBUM SEPARATORS (COULD ALSO SIMPLIFY THE DRAWING ROUTINE!)
-		List1 = Ctx1#mpl.current_list#slist{dsong=Result#dbsong.key},
+		{DSong, SSong, CNT} = query_adjacent(
+					ItemsRequested, Offset, After, Ctx1),
+		List1 = Ctx1#mpl.current_list#slist{dsong = DSong,
+						ssong = SSong, cnt = CNT},
 		gen_server:cast(Ctx1#mpl.ui, {db_list, List1}),
-		Ctx2 = Ctx1#mpl{current_list=List1},
-		case After > ItemsRequested of
+		Ctx1#mpl{current_list=List1};
+	_ResultFound ->
+		% TODO x REDUNDANT W/ UI (AND IT SEEMS E RECOMPUTE THE SAME STUFF AGAIN...) BUT UNIFYING THE DATA FORMAT SUGGESTS TO MOVE THE CODE HERE ANYWAYS!!
+		List1 = Ctx1#mpl.current_list#slist{ssong=Result#dbsong.key},
+		{Pre, DrawFrom} = maenmpc_util:divide_list_by_pred(fun(Song) ->
+					Song#dbsong.key =:= List1#slist.dsong
+				end, List1#slist.cnt),
+		DSong = case lists:keyfind(List1#slist.ssong, #dbsong.key, Pre) of
+		false ->
+			% Not before, it could be after
+			CheckL = lists:sublist(DrawFrom, 1, ItemsRequested),
+			case lists:keyfind(List1#slist.ssong, #dbsong.key, CheckL) of
+			false ->
+				% Not found after, its off screen, recompute the
+				% split based on ssong
+				{Pre2, _AfterSSong} =
+					maenmpc_util:divide_list_by_pred(
+					fun(Song) ->
+					Song#dbsong.key =:= List1#slist.ssong
+					end, List1#slist.cnt),
+				DBS = lists:nth(max(1,
+					length(Pre2) - ItemsRequested + 2),
+					Pre2),
+				DBS#dbsong.key;
+			_Found2 ->
+				% Found in range, no need to adjust it
+				List1#slist.dsong
+			end;
+		_Found ->
+			% Its before, must adjust DSong
+			List1#slist.ssong
+		end,
+		List2 = List1#slist{dsong=DSong},
+		gen_server:cast(Ctx1#mpl.ui, {db_list, List2}),
+		Ctx2 = Ctx1#mpl{current_list=List2},
+		case After >= ItemsRequested of
 		true ->
 			% Enough result headroom, no need to adjust anything
 			Ctx2;
 		false ->
-			% TODO Not enough result headroom, query artists and append/prepend to CNT until at least + ItemsRequested additional items have been queried!
-			Ctx2
+			{_DSong, _SSong, CNT} = query_adjacent(
+				ItemsRequested, Offset, After, Ctx2),
+			Ctx2#mpl{current_list=Ctx2#mpl.current_list#slist{
+								cnt = CNT}}
 		end
 	end.
 
@@ -573,6 +533,72 @@ find_offset_offset_song(ItemsRequested, CheckFor, [CntH|CntT], Before) ->
 	false ->
 		find_offset_offset_song(ItemsRequested, CheckFor, CntT,
 								Before + 1)
+	end.
+
+% -> {DSongKey, SSongKey, Cnt}
+query_adjacent(ItemsRequested, Offset, After, Ctx1) ->
+	NumToGo = ItemsRequested - After,
+	case Offset < 0 of
+	true ->
+		% Query before (TODO WHAT IF CNT IS EMPTY? - NEED TO HANDLE CASE OR PROVE THAT IT CANNOT OCCUR)
+		[BeforeIt|_T] = Ctx1#mpl.current_list#slist.cnt,
+		BeforeArtist = element(1, BeforeIt#dbsong.key),
+		{BeforeArtists, _InAfter} =
+			maenmpc_util:divide_list_by_pred(
+			fun(Artist) ->
+				Artist#sartist.name =:= BeforeArtist
+			end, Ctx1#mpl.current_list#slist.artists),
+		% TODO REVERSE OF REVERSE MADNESS, MERGE THEM FOR EFFICIENCY AND BETTER UNDERSTANDING
+		ToQuery = lists:reverse(assemble_artists(
+				lists:reverse(BeforeArtists), NumToGo +
+				2 * ItemsRequested, [])),
+		Songs = query_list_artists_songs(ToQuery, Ctx1),
+		NewSong = case length(Songs) > NumToGo of
+		true ->
+			% Not at the edge, reverse lookup in songs the
+			% missing number
+			lists:nth(length(Songs) - NumToGo, Songs);
+		false when Songs =:= [] ->
+			[SH|_ST] = Ctx1#mpl.current_list#slist.cnt,
+			SH;
+		false ->
+			% At the edge we select the “last” song which
+			% is effectively the first one in the result.
+			[SH|_ST] = Songs,
+			SH
+		end,
+		{NewSong#dbsong.key, NewSong#dbsong.key,
+				Songs ++ Ctx1#mpl.current_list#slist.cnt};
+	false ->
+		% Query after
+		SAE = lists:last(Ctx1#mpl.current_list#slist.cnt),
+		AfterArtist = element(1, SAE#dbsong.key),
+		% TODO WHAT IF EMTPY ETC, does below case catch all the
+		% relevant results?
+		{_BeforeIt, [_Incl|AfterArtists]} =
+			maenmpc_util:divide_list_by_pred(fun(Artist) ->
+				Artist#sartist.name =:= AfterArtist
+			end, Ctx1#mpl.current_list#slist.artists),
+		ToQuery = assemble_artists(AfterArtists, NumToGo +
+						3 * ItemsRequested, []),
+		case AfterArtists =:= [] orelse ToQuery =:= [] of
+		true ->
+			% At the edge select the last in CNT
+			{Ctx1#mpl.current_list#slist.dsong,
+			SAE#dbsong.key, Ctx1#mpl.current_list#slist.cnt};
+		false ->
+			Songs = query_list_artists_songs(ToQuery, Ctx1),
+			NewSong = case length(Songs) > NumToGo of
+			true  -> lists:nth(NumToGo, Songs);
+			% edge = select last
+			false -> lists:last(Songs)
+			end,
+			NewCnt = Ctx1#mpl.current_list#slist.cnt ++
+								Songs,
+			DSong = lists:nth(max(1, length(NewCnt) -
+					ItemsRequested), NewCnt),
+			{DSong#dbsong.key, NewSong#dbsong.key, NewCnt}
+		end
 	end.
 
 assemble_artists(Artists, NReq, Acc) when NReq =< 0 orelse Artists =:= [] ->

@@ -152,8 +152,13 @@ handle_cast({getch, Character}, Ctx) ->
 		$x            -> ui_request(Ctx, {ui_simple, toggle_xfade});
 		?ceKEY_UP     -> ui_scroll(Ctx, -1);
 		?ceKEY_DOWN   -> ui_scroll(Ctx, +1);
-		?ceKEY_PGDOWN -> ui_scroll(Ctx, main_height(Ctx) - 1);
-		?ceKEY_PGUP   -> ui_scroll(Ctx, 1 - main_height(Ctx));
+		% TODO CONVOLUTED...
+		?ceKEY_PGDOWN -> ui_scroll(Ctx, main_height(Ctx) -
+					case Ctx#view.page =:= queue of
+					true -> 1; false -> 0 end);
+		?ceKEY_PGUP   -> ui_scroll(Ctx, case Ctx#view.page =:= queue of
+					true -> 1; false -> 0 end -
+					main_height(Ctx));
 		?ceKEY_F(2)   -> ui_request(Ctx#view{page=queue},
 					{ui_queue, main_height(Ctx) - 1});
 		?ceKEY_F(4)   -> ui_request(Ctx#view{page=list},
