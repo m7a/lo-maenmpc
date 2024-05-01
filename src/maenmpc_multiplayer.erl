@@ -363,7 +363,8 @@ merge_by_criterion(ListRaw, GetKeyCB, Epsilon, ExtractCB, FinalizeCB) ->
 	end.
 
 query_list_inc(Ctx, Filter) ->
-	query_list_inc(Ctx, Filter, element(1, List0#slist.dsong)).
+	query_list_inc(Ctx, Filter, element(1,
+					Ctx#mpl.current_list#slist.dsong)).
 
 query_list_inc(Ctx, Filter, DArtist0) ->
 	List0 = Ctx#mpl.current_list,
