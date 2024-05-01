@@ -7,7 +7,7 @@
 	ui, alsa, mpd_list, mpd_active,
 	%mpd_ratings, % TODO UNUSED MAY NEED IT TO EDIT RATING!
 	maloja_url, maloja_key,
-	current_song, current_queue, current_list
+	current_song, current_queue, current_list, current_filter
 }).
 
 init([NotifyToUI]) ->
@@ -23,20 +23,23 @@ init([NotifyToUI]) ->
 	gen_server:cast(NotifyToUI, {db_cidx,
 				proplists:get_value(MPDFirst, MPDListIdx)}),
 	{ok, #mpl{
-		ui            = NotifyToUI,
-		alsa          = ALSAHWInfo,
-		mpd_list      = MPDListIdx, % [{name, idx}]
-		mpd_active    = MPDFirst,
+		ui             = NotifyToUI,
+		alsa           = ALSAHWInfo,
+		mpd_list       = MPDListIdx, % [{name, idx}]
+		mpd_active     = MPDFirst,
 		%mpd_ratings   = PrimaryRatings,
-		maloja_url    = proplists:get_value(url, Maloja, none),
-		maloja_key    = proplists:get_value(key, Maloja, none),
-		current_song  = #dbsong{key={<<>>, <<>>, <<>>}},
-		current_queue = #queue{cnt=[], total=-1, qoffset=0, doffset=0,
+		maloja_url     = proplists:get_value(url, Maloja, none),
+		maloja_key     = proplists:get_value(key, Maloja, none),
+		current_song   = #dbsong{key={<<>>, <<>>, <<>>}},
+		current_queue  = #queue{cnt=[], total=-1, qoffset=0, doffset=0,
 					dsel=0, last_query_len=0},
-		current_list  = #slist{cnt=[], artists=[],
+		current_list   = #slist{cnt=[], artists=[],
 					dsong={<<>>,<<>>,<<>>},
 					ssong={<<>>,<<>>,<<>>},
-					last_query_len=0}
+					last_query_len=0},
+		current_filter = {lnot, {land, [{tagop, artist, eq, ""},
+						{tagop, album,  eq, ""},
+						{tagop, title,  eq, ""}]}}
 	}}.
 
 handle_call(_Call, _From, Ctx) ->
@@ -104,14 +107,9 @@ handle_cast({ui_queue_scroll, Offset, ItemsRequested}, Ctx) ->
 handle_cast({ui_list, ItemsRequested}, Ctx) ->
 	CtxN = Ctx#mpl{current_list=Ctx#mpl.current_list#slist{
 					last_query_len=ItemsRequested}},
-	% TODO x FILTER SUPPORT COULD BE ADDED HERE
-	% by default filter songs without any info
-	Filter = {lnot, {land, [{tagop, artist, eq, ""},
-				{tagop, album,  eq, ""},
-				{tagop, title,  eq, ""}]}},
 	{noreply, case CtxN#mpl.current_list#slist.artists == [] of
-		true  -> query_list_new(CtxN, Filter);
-		false -> query_list_inc(CtxN, Filter)
+		true  -> query_list_new(CtxN);
+		false -> query_list_inc(CtxN)
 	end};
 handle_cast({ui_list_scroll, Offset, ItemsRequested}, Ctx) ->
 	{noreply, ui_list_scroll(Offset, ItemsRequested, Ctx)};
@@ -326,11 +324,12 @@ append_queue(NewQueue, Ctx) ->
 		}
 	end}.
 
-query_list_new(Ctx, Filter) ->
+query_list_new(Ctx) ->
 	Artists = merge_artists([call_singleplayer(Name, {query_artists_count,
-				Filter}) || {Name, _Idx} <- Ctx#mpl.mpd_list]),
+							Ctx#mpl.current_filter})
+					|| {Name, _Idx} <- Ctx#mpl.mpd_list]),
 	List0 = Ctx#mpl.current_list#slist{cnt=[], artists=Artists},
-	query_list_inc(Ctx#mpl{current_list=List0}, Filter).
+	query_list_inc(Ctx#mpl{current_list=List0}).
 
 merge_artists(ArtistsRaw) ->
 	merge_by_criterion(ArtistsRaw,
@@ -362,11 +361,10 @@ merge_by_criterion(ListRaw, GetKeyCB, Epsilon, ExtractCB, FinalizeCB) ->
 			Tails, GetKeyCB, Epsilon, ExtractCB, FinalizeCB)]
 	end.
 
-query_list_inc(Ctx, Filter) ->
-	query_list_inc(Ctx, Filter, element(1,
-					Ctx#mpl.current_list#slist.dsong)).
+query_list_inc(Ctx) ->
+	query_list_inc(Ctx, element(1, Ctx#mpl.current_list#slist.dsong)).
 
-query_list_inc(Ctx, Filter, DArtist0) ->
+query_list_inc(Ctx, DArtist0) ->
 	List0 = Ctx#mpl.current_list,
 	CtxRV = case List0#slist.artists of
 	% When nothing is found at all there is nothing to do...
@@ -382,11 +380,12 @@ query_list_inc(Ctx, Filter, DArtist0) ->
 			end,
 		QList = dartist_to_qlist(List1, DArtist1,
 						List0#slist.last_query_len),
-		query_list_artists(QList, Filter, Ctx#mpl{current_list=List1})
+		query_list_artists(QList, Ctx#mpl{current_list=List1})
 	end,
 	gen_server:cast(CtxRV#mpl.ui, {db_list, CtxRV#mpl.current_list}),
 	CtxRV.
 
+% TODO SPLIT AND assemble_artists BASED APPROACH MAY BE BETTER REALLY...
 dartist_to_qlist(List, DArtist, NumQuery) ->
 	{Prefix, Suffix} = lists:splitwith(fun(LE) ->
 			LE#sartist.name =< DArtist end, List#slist.artists),
@@ -405,11 +404,8 @@ count_lim(Lim, EL, {Val, List}) ->
 	false -> {Val + EL#sartist.minsz, [EL|List]}
 	end.
 
-query_list_artists(QList, Filter, Ctx) ->
-	SongsDeep = [call_singleplayer(Name, {query_artists,
-				[EL#sartist.name || EL <- QList], Filter})
-			|| {Name, _Idx} <- Ctx#mpl.mpd_list],
-	NewCnt = merge_songs(lists:append(SongsDeep)),
+query_list_artists(QList, Ctx) ->
+	NewCnt = query_list_artists_songs(QList, Ctx),
 	OldList = Ctx#mpl.current_list,
 	NewSong = case OldList#slist.dsong of
 			{<<>>,<<>>,<<>>} when length(NewCnt) > 0 ->
@@ -419,6 +415,12 @@ query_list_artists(QList, Filter, Ctx) ->
 		end,
 	Ctx#mpl{current_list=OldList#slist{cnt = NewCnt, dsong = NewSong,
 							ssong = NewSong}}.
+
+query_list_artists_songs(QList, Ctx) ->
+	merge_songs(lists:append([call_singleplayer(Name, {query_artists,
+					[EL#sartist.name || EL <- QList],
+					Ctx#mpl.current_filter})
+				|| {Name, _Idx} <- Ctx#mpl.mpd_list])).
 
 merge_songs(SongsRaw) ->
 	merge_by_criterion(SongsRaw,
@@ -430,6 +432,7 @@ merge_songs(SongsRaw) ->
 			lists:foldl(fun merge_song_info/2, VH, VT)
 		end).
 
+% TODO X ALL SCROLL RELATED ROUTINES SHOULD BE REVISED, ENHANCED AND UNIFIED AFTER INTRODUCTION OF DUMMY/ALBUM SONG CONCEPT...
 ui_list_scroll(Offset, ItemsRequested, Ctx0) ->
 	Ctx1 = Ctx0#mpl{current_list=Ctx0#mpl.current_list#slist{
 						last_query_len=ItemsRequested}},
@@ -442,12 +445,86 @@ ui_list_scroll(Offset, ItemsRequested, Ctx0) ->
 		find_offset_offset_song(abs(Offset),
 			Ctx1#mpl.current_list#slist.dsong, SearchCnt, 0),
 	case Result of
-	out_of_range_dsong ->
-		% TODO x Ignore for now / Identify artist and query anew but starting from that one -2 / +3 * ItemsRequested or such. / HERE we basically need the same traversal mechanism as the GUI has for counting. Similar need down below to do the artist separation correctly.... Think about it? / maybe express find_offset_offset_song as a fold-based function and then offer a routine that can do fold for cnt + continue beyond by switching to a different callback or something weird of that sorts?
-		Ctx1;
-	out_of_range_request ->
-		% TODO Scroll beyond the limit by at least “After” - Need to load the new data right now before replying to UI, or if we are at the end, move cursor to the last one/first one in CNT...!
-		Ctx1;
+	out_of_range_detached ->
+		% TODO EXPERIMENTAL - IF WE JUMPED JUST JUMP TO THE ARTIST AND IGNORE THE SCROLL REQUEST FOR NOW
+		query_list_inc(Ctx1);
+	out_of_range_adjacent ->
+		NumToGo = ItemsRequested - After,
+		case Offset < 0 of
+		true ->
+			% Query before (TODO WHAT IF CNT IS EMPTY? - NEED TO HANDLE CASE OR PROVE THAT IT CANNOT OCCUR)
+			[BeforeIt|_T] = Ctx1#mpl.current_list#slist.cnt,
+			BeforeArtist = element(1, BeforeIt#dbsong.key),
+			{BeforeArtists, _InAfter} = divide_list_by_pred(
+				fun(Artist) ->
+					Artist#sartist.name =:= BeforeArtist
+				end, Ctx1#mpl.current_list#slist.artists),
+			% TODO REVERSE OF REVERSE MADNESS, MERGE THEM FOR EFFICIENCY AND BETTER UNDERSTANDING
+			ToQuery = lists:reverse(assemble_artists(
+					lists:reverse(BeforeArtists), NumToGo +
+					2 * ItemsRequested, [])),
+			Songs = query_list_artists_songs(ToQuery, Ctx1),
+			NewSong = case length(Songs) > NumToGo of
+			true ->
+				% Not at the edge, reverse lookup in songs the
+				% missing number
+				lists:nth(length(Songs) - NumToGo, Songs);
+			false when Songs =:= [] ->
+				[SH|_ST] = Ctx1#mpl.current_list#slist.cnt,
+				SH;
+			false ->
+				% At the edge we select the “last” song which
+				% is effectively the first one in the result.
+				[SH|_ST] = Songs,
+				SH
+			end,
+			List1 = Ctx1#mpl.current_list#slist{
+				dsong = NewSong#dbsong.key,
+				ssong = NewSong#dbsong.key,
+				cnt   = Songs ++ Ctx1#mpl.current_list#slist.cnt
+			},
+			gen_server:cast(Ctx1#mpl.ui, {db_list, List1}),
+			Ctx1#mpl{current_list=List1};
+		false ->
+			% Query after
+			SAE = lists:last(Ctx1#mpl.current_list#slist.cnt),
+			AfterArtist = element(1, SAE#dbsong.key),
+			% TODO WHAT IF EMTPY ETC, does below case catch all the
+			% relevant results?
+			{_BeforeIt, [_Incl|AfterArtists]} =
+				divide_list_by_pred(fun(Artist) ->
+					Artist#sartist.name =:= AfterArtist
+				end, Ctx1#mpl.current_list#slist.artists),
+			ToQuery = assemble_artists(AfterArtists, NumToGo +
+							3 * ItemsRequested, []),
+			case AfterArtists =:= [] orelse ToQuery =:= [] of
+			true ->
+				% At the edge select the last in CNT
+				Ctx1#mpl{current_list=
+					Ctx1#mpl.current_list#slist{
+						dsong=SAE#dbsong.key,
+						ssong=SAE#dbsong.key}};
+			false ->
+				Songs = query_list_artists_songs(ToQuery, Ctx1),
+				NewSong = case length(Songs) > NumToGo of
+				true  -> lists:nth(NumToGo, Songs);
+				% edge = select last
+				false -> lists:last(Songs)
+				end,
+				NewCnt = Ctx1#mpl.current_list#slist.cnt ++
+									Songs,
+				% TODO INACCURATE W/O DUMMY ENTRIES
+				DSong = lists:nth(max(1, length(NewCnt) -
+						ItemsRequested), NewCnt),
+				List1 = Ctx1#mpl.current_list#slist{
+					dsong = DSong#dbsong.key,
+					ssong = NewSong#dbsong.key,
+					cnt   = NewCnt
+				},
+				gen_server:cast(Ctx1#mpl.ui, {db_list, List1}),
+				Ctx1#mpl{current_list=List1}
+			end
+		end;
 	_ResultFound ->
 		% TODO CSTAT WE ARE AT A LIMIT HERE. TO SCROLL CORRECTLY, MUST CHANGE DSONG AND SSONG. THIS IS ONLY POSSIBLE IF THE DISTANCE BETWEEN THEM TWO IS WELL KNOWN AND WELL-COMPUTABLE, THOUGH. EITHER MODEL THE “ARTIST SEPARATION” IN THE COUNTING “find_offset_offset_song” OR GENERATE DUMMY SONGS AS ALBUM SEPARATORS (COULD ALSO SIMPLIFY THE DRAWING ROUTINE!)
 		List1 = Ctx1#mpl.current_list#slist{dsong=Result#dbsong.key},
@@ -464,19 +541,47 @@ ui_list_scroll(Offset, ItemsRequested, Ctx0) ->
 	end.
 
 find_offset_offset_song(_ItemsRequested, _CheckFor, [], Before) ->
-	{out_of_range_dsong, Before, 0};
+	{out_of_range_detached, Before, 0};
 find_offset_offset_song(ItemsRequested, CheckFor, [CntH|CntT], Before) ->
 	case CntH#dbsong.key =:= CheckFor of
 	true ->
 		case length(CntT) >= ItemsRequested of
 		true -> {lists:last(lists:sublist(CntT, ItemsRequested)),
 					Before, length(CntT) - ItemsRequested};
-		false -> {out_of_range_request, Before, length(CntT)}
+		false -> {out_of_range_adjacent, Before, length(CntT)}
 		end;
 	false ->
 		find_offset_offset_song(ItemsRequested, CheckFor, CntT,
 								Before + 1)
 	end.
+
+% Split list by predicate and return a tuple with exactly two lists
+% First list contains all items before the predicate matches (excl)
+% Second list contains all items after the predicate matches (incl)
+divide_list_by_pred(Predicate, List) ->
+	divide_list_by_pred(Predicate, List, {[], []}).
+divide_list_by_pred(_Predicate, [], {PreAcc, PostAcc}) ->
+	{lists:reverse(PreAcc), lists:reverse(PostAcc)};
+divide_list_by_pred(Predicate, [H|T], {PreAcc, PostAcc}) ->
+	case PostAcc =/= [] orelse Predicate(H) of
+	true  -> divide_list_by_pred(Predicate, T, {PreAcc, [H|PostAcc]});
+	false -> divide_list_by_pred(Predicate, T, {[H|PreAcc], PostAcc})
+	end.
+
+assemble_artists(Artists, NReq, Acc) when NReq =< 0 orelse Artists =:= [] ->
+	lists:reverse(Acc);
+assemble_artists([Artist|Others], NReq, Acc) ->
+	assemble_artists(Others, NReq - Artist#sartist.minsz, [Artist|Acc]).
+
+% alternative implementation using foldl...
+%divide_list_by_pred(Predicate, List) ->
+%	{BeforeRev, AfterIncRev} = lists:foldl(fun(Item, {PreL, PostL}) ->
+%		case PostL =/= orelse Predicate(Item) of
+%			true ->  {PreL, [Item|PostL]};
+%			false -> {[Item|PreL], PostL}
+%		end
+%	end, {[], []}, List),
+%	{lists:reverse(BeforeRev), lists:reverse(AfterIncRev)}.
 
 handle_info(interrupt_idle, Ctx) ->
 	call_singleplayer(Ctx#mpl.mpd_active, request_update),

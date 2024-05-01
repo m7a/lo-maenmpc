@@ -52,7 +52,8 @@ epsilon_song(NumPlayers) ->
 handle_call(is_online, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:is_online(Ctx#spl.syncidle), Ctx};
 handle_call(request_update, _From, Ctx) ->
-	{reply, maenmpc_sync_idle:interrupt_no_tx(Ctx#spl.syncidle), Ctx};
+	maenmpc_sync_idle:interrupt_no_tx(Ctx#spl.syncidle),
+	{reply, ok, Ctx};
 handle_call({mpd_idle, Name, Subsystems, Conn}, _From, Ctx) ->
 	Ctx1 = update_playing_info(Name, Conn, Ctx),
 	case lists:member(playlist, Subsystems) of
