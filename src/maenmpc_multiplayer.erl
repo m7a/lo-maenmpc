@@ -417,10 +417,12 @@ query_list_artists(QList, Ctx) ->
 							ssong = NewSong}}.
 
 query_list_artists_songs(QList, Ctx) ->
-	merge_songs(lists:append([call_singleplayer(Name, {query_artists,
+	generate_album_dummies(merge_songs(lists:append(
+				[call_singleplayer(Name, {query_artists,
 					[EL#sartist.name || EL <- QList],
 					Ctx#mpl.current_filter})
-				|| {Name, _Idx} <- Ctx#mpl.mpd_list])).
+				|| {Name, _Idx} <- Ctx#mpl.mpd_list])),
+				{<<>>, <<>>}).
 
 merge_songs(SongsRaw) ->
 	merge_by_criterion(SongsRaw,
@@ -432,7 +434,24 @@ merge_songs(SongsRaw) ->
 			lists:foldl(fun merge_song_info/2, VH, VT)
 		end).
 
-% TODO X ALL SCROLL RELATED ROUTINES SHOULD BE REVISED, ENHANCED AND UNIFIED AFTER INTRODUCTION OF DUMMY/ALBUM SONG CONCEPT...
+% TODO x might be slow due to missing tail recursion...
+generate_album_dummies([], _CAA) ->
+	[];
+generate_album_dummies([H|T], {CAR, CAL}) ->
+	{SAR, SAL, _SAT} = H#dbsong.key,
+	case CAR =:= SAR andalso CAL =:= SAL of
+	true  -> [H|generate_album_dummies(T, {CAR, CAL})];
+	false -> [H#dbsong{
+			% TODO IF RELEVANT COULD MAP URIS TO PARENT DIR...
+			key       = {SAR, SAL, album},
+			playcount = -1,
+			rating    = -1,
+			duration  = 1,
+			trackno   = 0
+		 }|[H|generate_album_dummies(T, {SAR, SAL})]]
+	end.
+
+% TODO X ALL SCROLL RELATED ROUTINES SHOULD BE REVISED, ENHANCED AND UNIFIED
 ui_list_scroll(Offset, ItemsRequested, Ctx0) ->
 	Ctx1 = Ctx0#mpl{current_list=Ctx0#mpl.current_list#slist{
 						last_query_len=ItemsRequested}},
@@ -455,7 +474,8 @@ ui_list_scroll(Offset, ItemsRequested, Ctx0) ->
 			% Query before (TODO WHAT IF CNT IS EMPTY? - NEED TO HANDLE CASE OR PROVE THAT IT CANNOT OCCUR)
 			[BeforeIt|_T] = Ctx1#mpl.current_list#slist.cnt,
 			BeforeArtist = element(1, BeforeIt#dbsong.key),
-			{BeforeArtists, _InAfter} = divide_list_by_pred(
+			{BeforeArtists, _InAfter} =
+				maenmpc_util:divide_list_by_pred(
 				fun(Artist) ->
 					Artist#sartist.name =:= BeforeArtist
 				end, Ctx1#mpl.current_list#slist.artists),
@@ -492,7 +512,7 @@ ui_list_scroll(Offset, ItemsRequested, Ctx0) ->
 			% TODO WHAT IF EMTPY ETC, does below case catch all the
 			% relevant results?
 			{_BeforeIt, [_Incl|AfterArtists]} =
-				divide_list_by_pred(fun(Artist) ->
+				maenmpc_util:divide_list_by_pred(fun(Artist) ->
 					Artist#sartist.name =:= AfterArtist
 				end, Ctx1#mpl.current_list#slist.artists),
 			ToQuery = assemble_artists(AfterArtists, NumToGo +
@@ -555,33 +575,10 @@ find_offset_offset_song(ItemsRequested, CheckFor, [CntH|CntT], Before) ->
 								Before + 1)
 	end.
 
-% Split list by predicate and return a tuple with exactly two lists
-% First list contains all items before the predicate matches (excl)
-% Second list contains all items after the predicate matches (incl)
-divide_list_by_pred(Predicate, List) ->
-	divide_list_by_pred(Predicate, List, {[], []}).
-divide_list_by_pred(_Predicate, [], {PreAcc, PostAcc}) ->
-	{lists:reverse(PreAcc), lists:reverse(PostAcc)};
-divide_list_by_pred(Predicate, [H|T], {PreAcc, PostAcc}) ->
-	case PostAcc =/= [] orelse Predicate(H) of
-	true  -> divide_list_by_pred(Predicate, T, {PreAcc, [H|PostAcc]});
-	false -> divide_list_by_pred(Predicate, T, {[H|PreAcc], PostAcc})
-	end.
-
 assemble_artists(Artists, NReq, Acc) when NReq =< 0 orelse Artists =:= [] ->
 	lists:reverse(Acc);
 assemble_artists([Artist|Others], NReq, Acc) ->
 	assemble_artists(Others, NReq - Artist#sartist.minsz, [Artist|Acc]).
-
-% alternative implementation using foldl...
-%divide_list_by_pred(Predicate, List) ->
-%	{BeforeRev, AfterIncRev} = lists:foldl(fun(Item, {PreL, PostL}) ->
-%		case PostL =/= orelse Predicate(Item) of
-%			true ->  {PreL, [Item|PostL]};
-%			false -> {[Item|PreL], PostL}
-%		end
-%	end, {[], []}, List),
-%	{lists:reverse(BeforeRev), lists:reverse(AfterIncRev)}.
 
 handle_info(interrupt_idle, Ctx) ->
 	call_singleplayer(Ctx#mpl.mpd_active, request_update),
