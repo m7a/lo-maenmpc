@@ -13,13 +13,17 @@
 		year::binary(), trackno::integer(), audios::binary(),
 		playlist_id::integer()}.
 
--record(queue, {cnt, total, qoffset, doffset, dsel, last_query_len}).
--type queue() :: #queue{cnt::[dbsong()], total::integer(), qoffset::integer(),
-		doffset::integer(), last_query_len::integer()}.
-
-% results := {count1, count2}
-% qartist := lists:first(cnt).name
-% dsong, ssong := {<<>>,<<>>,<<>>}
-% artists := list of sartist | [{artist, [list]}, {artist, [list]}]...
--record(sartist, {name, results, minsz, knownsz}).
--record(slist, {cnt, artists, dsong, ssong, last_query_len}).
+% New generic scroll record
+% -- general --
+% type := queue | list
+% -- ui view --
+% user_data when sent to UI = {current_song_playlist_id, absolute_offset}
+% coffset guaranteed to be 0 for UI usage
+% -- db view --
+% qoffset=0 means at upper boundary, len(cnt)==total means entire DB covered
+% user_data(type=queue) = {artists,beforerev,after}
+-record(dbscroll, {type, cnt, coffset, csel, total, last_query_len, qoffset,
+		user_data}).
+-type dbscoll() :: #dbscroll{type::atom(), cnt::[dbsong()], coffset::integer(),
+		csel::integer(), total::integer(), last_query_len::integer(),
+		qoffset::integer(), user_data::term()}.

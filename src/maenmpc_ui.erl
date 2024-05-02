@@ -177,16 +177,8 @@ handle_cast({db_playing, SongAndStatus}, Ctx) ->
 		ErrorInfo -> display_error(Ctx, io_lib:format(
 					"status query error: ~w", [ErrorInfo]))
 	end};
-handle_cast({db_queue, Queue, CurrentSongID}, Ctx) ->
-	{noreply, case Ctx#view.page =:= queue of
-		true  -> draw_queue(Ctx, Queue, CurrentSongID);
-		false -> Ctx
-	end};
-handle_cast({db_list, List}, Ctx) ->
-	{noreply, case Ctx#view.page =:= list of
-		true  -> draw_list(Ctx, List);
-		false -> Ctx
-	end};
+handle_cast({db_results, L}, Ctx) when L#dbscroll.type =:= Ctx#view.page ->
+	{noreply, draw_results(Ctx, L)};
 handle_cast(_Cast, Ctx) ->
 	{noreply, Ctx}.
 
@@ -300,58 +292,88 @@ display_error(Ctx, Error) ->
 	cecho:wrefresh(Ctx#view.wnd_status),
 	Ctx.
 
-draw_queue(Ctx, Queue, CurrentSongID) ->
+draw_results(Ctx, List=#dbscroll{cnt=Cnt, total=Total,
+				user_data={_CurrentSongID, AbsoluteOffset}}) ->
 	cecho:werase(Ctx#view.wnd_main),
-	WA = max(1, (Ctx#view.width - 20) * 1 div 3),
-	WT = max(1, (Ctx#view.width - 20) * 2 div 3),
-	cecho:mvwaddstr(Ctx#view.wnd_main, 0, 0,
-				io_lib:format("  Rated  ~s  ~s  MM:ss",
-				[utf8pad(WA, "Artist"), utf8pad(WT, "Title")])),
-	cecho:mvwaddstr(Ctx#view.wnd_main, 0, Ctx#view.width - 1, "_"),
-	MaxDraw = max(0, main_height(Ctx) - 1),
-	DrawItems = lists:sublist(Queue#queue.cnt,
-			Queue#queue.doffset - Queue#queue.qoffset + 1, MaxDraw),
-	{SHeight, SOffset} = scroll_offset_height(Queue#queue.doffset,
-						Queue#queue.total, MaxDraw, 1),
+	{Info, MaxDraw, DY} = draw_results_begin(Ctx, List),
+	{SHeight, SOffset} = scroll_offset_height(AbsoluteOffset, Total,
+								MaxDraw, DY),
 	SelVal = lists:foldl(fun({S, Y}, SelIn) ->
-		IsCurrent = S#dbsong.playlist_id =:= CurrentSongID andalso
-							CurrentSongID /= -1,
-		IsSel = Queue#queue.doffset + Y - 1 =:= Queue#queue.dsel,
-		Atts = uris_to_cpair(S, IsSel) bor
-			case IsCurrent of true -> ?ceA_BOLD; false -> 0 end,
-		cecho:attron(Ctx#view.wnd_main, Atts),
-		cecho:mvwaddstr(Ctx#view.wnd_main, Y, 0,
-			io_lib:format("~c ~s  ~s  ~s  ~2..0w:~2..0w",
-			[case IsCurrent of true -> $>; false -> $ end,
-			format_rating(S#dbsong.rating),
-			utf8pad(WA, element(1, S#dbsong.key)),
-			utf8pad(WT, element(3, S#dbsong.key)),
-			S#dbsong.duration div 60,
-			S#dbsong.duration rem 60])),
-		cecho:attroff(Ctx#view.wnd_main, Atts),
-		draw_scroll(Ctx, SHeight, SOffset, Y),
-		case IsSel of true -> S; false -> SelIn end
-	end, none, lists:zip(DrawItems, lists:seq(1, length(DrawItems)))),
+			IsSel = draw_result_line(Ctx, List, {S, Y}, Info),
+			draw_scroll(Ctx, SHeight, SOffset, Y),
+			case IsSel of true -> S; false -> SelIn end
+		end, none, lists:zip(Cnt, lists:seq(DY, length(Cnt) + DY - 1))),
 	lists:foreach(fun(Y) -> draw_scroll(Ctx, SHeight, SOffset, Y) end,
-					lists:seq(length(DrawItems), MaxDraw)),
+				lists:seq(length(Cnt) + DY, MaxDraw)),
 	cecho:wrefresh(Ctx#view.wnd_main),
 	case SelVal of
 	none -> Ctx;
 	_Sel -> draw_sel(Ctx, SelVal)
 	end.
 
+draw_results_begin(Ctx, #dbscroll{type=queue}) ->
+	WA = max(1, (Ctx#view.width - 20) * 1 div 3),
+	WT = max(1, (Ctx#view.width - 20) * 2 div 3),
+	cecho:mvwaddstr(Ctx#view.wnd_main, 0, 0,
+				io_lib:format("  Rated  ~s  ~s  MM:ss",
+				[utf8pad(WA, "Artist"), utf8pad(WT, "Title")])),
+	cecho:mvwaddstr(Ctx#view.wnd_main, 0, Ctx#view.width - 1, "_"),
+	{{WA, WT}, max(0, main_height(Ctx) - 1), 1};
+draw_results_begin(Ctx, #dbscroll{type=list}) ->
+	{max(1, Ctx#view.width - 24), max(0, main_height(Ctx)), 0}.
+
 scroll_offset_height(DOffset, Total, MaxDraw, DY) ->
 	SHeight = max(1, min(MaxDraw, MaxDraw * MaxDraw div max(1, Total))),
-	% TODO x CONVOLUTED BUT ALMOST WORKS - ONLY ONE MINOR CONCERN WRT SCROLLING: AT END THE LOWER BOUND MAY VANISH OFF SCREEN, MUST STOP EARLY ENOUGH...!
+	% TODO USE VARIANT DESIGNED ON PAPER --- CURENT ONE IS CONVOLUTED AND ALMOST WORKS - ONLY ONE MINOR CONCERN WRT SCROLLING: AT END THE LOWER BOUND MAY VANISH OFF SCREEN, MUST STOP EARLY ENOUGH...! - 
 	SOffset = case DY + (DOffset * MaxDraw div max(Total, 1)) of
-			DY when DOffset /= 0 ->
-				DY + 1;
+			DY when DOffset /= 0 -> DY + 1;
 			Value when DOffset + MaxDraw < Total ->
 				min(Value, max(0, MaxDraw - SHeight - 1));
-			Value ->
-				Value
+			Value -> Value
 		end,
 	{SHeight, SOffset}.
+
+draw_result_line(Ctx, #dbscroll{type=queue, csel=CSel,
+				user_data={CurrentSongID, _AbsoluteOffset}},
+				{S, Y}, {WA, WT}) ->
+	IsCurrent = S#dbsong.playlist_id =:= CurrentSongID andalso
+							CurrentSongID /= -1,
+	IsSel = Y - 1 =:= CSel,
+	Atts = uris_to_cpair(S, IsSel) bor
+		case IsCurrent of true -> ?ceA_BOLD; false -> 0 end,
+	cecho:attron(Ctx#view.wnd_main, Atts),
+	cecho:mvwaddstr(Ctx#view.wnd_main, Y, 0,
+		io_lib:format("~c ~s  ~s  ~s  ~2..0w:~2..0w",
+		[case IsCurrent of true -> $>; false -> $ end,
+		format_rating(S#dbsong.rating),
+		utf8pad(WA, element(1, S#dbsong.key)),
+		utf8pad(WT, element(3, S#dbsong.key)),
+		S#dbsong.duration div 60,
+		S#dbsong.duration rem 60])),
+	cecho:attroff(Ctx#view.wnd_main, Atts),
+	IsSel;
+draw_result_line(Ctx, #dbscroll{type=list, csel=CSel}, {S, Y}, WT) ->
+	IsSel = Y =:= CSel,
+	case S#dbsong.key of
+	{Artist, Album, album} ->
+		AttsD = uris_to_cpair(S, IsSel) bor ?ceA_BOLD,
+		cecho:attron(Ctx#view.wnd_main, AttsD),
+		cecho:mvwaddstr(Ctx#view.wnd_main, Y, 0, io_lib:format(
+			"~s (~s): ~s", [Artist, S#dbsong.year, Album])),
+		cecho:attroff(Ctx#view.wnd_main, AttsD);
+	{_Artist, _Album, Title} ->
+		Atts = uris_to_cpair(S, IsSel),
+		cecho:attron(Ctx#view.wnd_main, Atts),
+		cecho:mvwaddstr(Ctx#view.wnd_main, Y, 2,
+			io_lib:format("~2..0w  ~s  ~s  ~2..0w:~2..0w",
+			[S#dbsong.trackno,
+			format_rating(S#dbsong.rating),
+			utf8pad(WT, Title),
+			S#dbsong.duration div 60,
+			S#dbsong.duration rem 60])),
+		cecho:attroff(Ctx#view.wnd_main, Atts)
+	end,
+	IsSel.
 
 uris_to_cpair(S, IsSel) ->
 	case S#dbsong.uris of
@@ -394,76 +416,11 @@ draw_sel(Ctx, S) ->
 	cecho:wrefresh(Ctx#view.wnd_sel_card),
 	Ctx.
 
-draw_list(Ctx, List) ->
-	cecho:werase(Ctx#view.wnd_main),
-	WT = max(1, Ctx#view.width - 24),
-	{Pre, DrawFrom} = maenmpc_util:divide_list_by_pred(fun(Song) ->
-				Song#dbsong.key =:= List#slist.dsong
-			end, List#slist.cnt),
-	MaxDraw = max(0, main_height(Ctx)),
-	ToDraw = case length(DrawFrom) >= MaxDraw of
-		true ->
-			lists:sublist(DrawFrom, 1, MaxDraw);
-		false ->
-			FillFromOther = MaxDraw - length(DrawFrom),
-			lists:sublist(Pre, max(1, length(Pre) - FillFromOther),
-						FillFromOther) ++ DrawFrom
-		end,
-	{SBefore, STotal} = slist_to_scroll_info(List, Pre, DrawFrom),
-	{SHeight, SOffset} = scroll_offset_height(SBefore, STotal, MaxDraw, 0),
-	lists:foreach(fun({S, Y}) ->
-		IsSel = List#slist.ssong =:= S#dbsong.key,
-		case S#dbsong.key of
-		{Artist, Album, album} ->
-			AttsD = uris_to_cpair(S, IsSel) bor ?ceA_BOLD,
-			cecho:attron(Ctx#view.wnd_main, AttsD),
-			cecho:mvwaddstr(Ctx#view.wnd_main, Y, 0, io_lib:format(
-				"~s (~s): ~s", [Artist, S#dbsong.year, Album])),
-			cecho:attroff(Ctx#view.wnd_main, AttsD);
-		{_Artist, _Album, Title} ->
-			Atts = uris_to_cpair(S, IsSel),
-			cecho:attron(Ctx#view.wnd_main, Atts),
-			cecho:mvwaddstr(Ctx#view.wnd_main, Y, 2,
-				io_lib:format("~2..0w  ~s  ~s  ~2..0w:~2..0w",
-				[S#dbsong.trackno,
- 				format_rating(S#dbsong.rating),
-				utf8pad(WT, Title),
-				S#dbsong.duration div 60,
-				S#dbsong.duration rem 60])),
-			cecho:attroff(Ctx#view.wnd_main, Atts)
-		end,
-		draw_scroll(Ctx, SHeight, SOffset, Y)
-	end, lists:zip(ToDraw, lists:seq(0, length(ToDraw) - 1))),
-	lists:foreach(fun(Y) -> draw_scroll(Ctx, SHeight, SOffset, Y) end,
-				lists:seq(length(ToDraw), MaxDraw - 1)),
-	cecho:wrefresh(Ctx#view.wnd_main),
-	Ctx.
-
-slist_to_scroll_info(List, CNTBefore, CNTInAfter) ->
-	[StartEL|_Others] = List#slist.cnt,
-	StartKey = StartEL#dbsong.key,
-	{OtherBefore, OtherInterm} = maenmpc_util:divide_list_by_pred(
-			fun(Artist) ->
-				Artist#sartist.name =:= element(1, StartKey)
-			end, List#slist.artists),
-	EndSong = lists:last(CNTInAfter),
-	EndArtist = element(1, EndSong#dbsong.key),
-	{_Inner, OtherAfter} = maenmpc_util:divide_list_by_pred(fun(Artist) ->
-				Artist#sartist.name =:= EndArtist
-			end, OtherInterm),
-	Before = sum_artists(OtherBefore) + length(CNTBefore),
-	{Before, Before + sum_artists(OtherAfter) + length(CNTInAfter)}.
-
-sum_artists(Artists) ->
-	lists:foldl(fun(Artist, Acc) ->
-		Acc + Artist#sartist.minsz
-	end, 0, Artists).
-
 ui_scroll(Ctx, Offset) ->
 	case Ctx#view.page of
-	queue  -> ui_request(Ctx, {ui_queue_scroll, Offset,
+	queue  -> ui_request(Ctx, {ui_scroll, queue, Offset,
 							main_height(Ctx) - 1});
-	list   -> ui_request(Ctx, {ui_list_scroll, Offset, main_height(Ctx)});
+	list   -> ui_request(Ctx, {ui_scroll, list, Offset, main_height(Ctx)});
 	_Other -> Ctx % scrolling currently not supported for other views
 	end.
 
