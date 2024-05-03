@@ -160,9 +160,9 @@ handle_cast({getch, Character}, Ctx) ->
 					true -> 1; false -> 0 end -
 					main_height(Ctx));
 		?ceKEY_F(2)   -> ui_request(Ctx#view{page=queue},
-					{ui_queue, main_height(Ctx) - 1});
+					{ui_query, queue, main_height(Ctx) - 1});
 		?ceKEY_F(4)   -> ui_request(Ctx#view{page=list},
-					{ui_list, main_height(Ctx) - 1});
+					{ui_query, list, main_height(Ctx) - 1});
 		?ceKEY_F(10)  -> init:stop(0), Ctx;
 		?ceKEY_RESIZE -> ui_resize(Ctx);
 		_Any          -> Ctx
@@ -324,7 +324,7 @@ draw_results_begin(Ctx, #dbscroll{type=list}) ->
 
 scroll_offset_height(DOffset, Total, MaxDraw) ->
 	SHeight = min(MaxDraw, MaxDraw * MaxDraw div max(1, Total)),
-	SOffsetRaw = max(0, DOffset * (MaxDraw - SHeight) div max(1, Total)),
+	SOffsetRaw = max(0, DOffset * MaxDraw div max(1, Total)),
 	if
 	DOffset /= 0 andalso SOffsetRaw == 0 ->
 		{SOffsetRaw + 1, SHeight};
