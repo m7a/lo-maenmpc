@@ -100,14 +100,14 @@ handle_call({query_queue, ItemsRequested, CurrentQ}, _From, Ctx) ->
 			 true  -> update_status(erlmpd:status(Conn), Ctx);
 			 false -> Ctx
 			 end,
-		Q0A = min(CurrentQ#dbscroll.qoffset, Ctx1#spl.mpd_plength),
-		Q1A = min(CurrentQ#dbscroll.qoffset + ItemsRequested,
-							Ctx1#spl.mpd_plength),
+		Q0A = max(0, min(CurrentQ#dbscroll.qoffset,
+						Ctx1#spl.mpd_plength - 1)),
+		Q1A = min(Q0A + ItemsRequested, Ctx1#spl.mpd_plength),
 		{CurrentQ#dbscroll{
 			cnt=[query_rating(parse_metadata(El, Ctx1), Conn, Ctx1)
 				|| El <- erlmpd:playlistinfo(Conn, {Q0A, Q1A})],
 			total=Ctx1#spl.mpd_plength,
-			qoffset=Q0A
+			qoffset=max(0, Q0A - ItemsRequested)
 		}, Ctx1}
 	end),
 	{reply, NewQ, Ctx2};

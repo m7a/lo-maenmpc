@@ -15,7 +15,7 @@ init([NotifyToUI]) ->
 	{ok, MPDList}        = application:get_env(maenmpc, mpd),
 	{ok, ALSAHWInfo}     = application:get_env(maenmpc, alsa),
 	{ok, Maloja}         = application:get_env(maenmpc, maloja),
-	MPDFirst = local, % TODO DEBUG ONLY
+	MPDFirst = m16, % TODO DEBUG ONLY
 	%[MPDFirst|_Others] = MPDList,
 	timer:send_interval(5000, interrupt_idle),
 	MPDListIdx = [{Name, Idx} || {{Name, _ConnInfo}, Idx} <-
@@ -188,24 +188,19 @@ check_in_range(#dbscroll{cnt=Cnt, coffset=COffset, total=Total,
 					last_query_len=R, qoffset=QOffset}) ->
 	Len = length(Cnt),
 	if
-	(COffset             >= R orelse QOffset == 0) andalso
-	(Len - (COffset + R) >= R orelse Len == Total) ->
-		{in_range, ok};
-	COffset >= 0 andalso Len - (COffset + R) >= 0 ->
-		case COffset < R of
-		true  -> {in_range, query_before};
-		false -> {in_range, query_after}
-		end;
-	true ->
-		out_of_range
+	COffset < 0 orelse  Len - COffset < R  -> out_of_range;
+	COffset =< R andalso QOffset /= 0 -> {in_range, query_before};
+	Len - COffset =< (2 * R) andalso Len < Total -> {in_range, query_after};
+	true -> {in_range, ok}
 	end.
 
 proc_range_result(Ctx, RangeResult,
 			List=#dbscroll{last_query_len=ItemsRequested}) ->
-	List2 = query_playcount(Ctx, case RangeResult of
-			out_of_range -> list_replace(Ctx, List);
-			_Other1      -> List
-		end),
+	List2 = case RangeResult of
+		out_of_range   -> query_playcount(Ctx, list_replace(Ctx, List));
+		{in_range, ok} -> query_playcount(Ctx, List);
+		_Other1        -> List
+		end,
 	transform_and_send_to_ui(Ctx, List2),
 	List3 = case RangeResult of
 		{in_range, ok} ->
@@ -231,13 +226,13 @@ list_replace(Ctx, List=#dbscroll{type=list,
 	Artists = merge_artists([call_singleplayer(Name, {query_artists_count,
 							Ctx#mpl.current_filter})
 					|| Name <- get_active_players(Ctx)]),
-	{Selected, Remaining} = assemble_artists(Artists, NReq, []),
+	{Selected, Remaining} = assemble_artists(Artists, NReq * 3, []),
 	Cnt = query_list_artists_songs(Selected, Ctx),
 	HaveCnt = length(Cnt),
 	update_total(List#dbscroll{
 		cnt       = Cnt,
-		coffset   = max(0, min(HaveCnt - NReq, COffset)),
-		csel      = max(0, min(HaveCnt - NReq, CSel)),
+		coffset   = max(0, min(HaveCnt - NReq * 3,     COffset)),
+		csel      = max(0, min(HaveCnt - NReq * 2 + 1, CSel)),
 		qoffset   = 0,
 		user_data = {Artists, [], Remaining}
 	});
@@ -329,7 +324,9 @@ generate_album_dummies([H|T], {CAR, CAL}) ->
 	case CAR =:= SAR andalso CAL =:= SAL of
 	true  -> [H|generate_album_dummies(T, {CAR, CAL})];
 	false -> [H#dbsong{
-			% TODO IF RELEVANT COULD MAP URIS TO PARENT DIR...
+			% Not really possible to do anything with the URLs here
+			% without knowing what kind of file structure the user
+			% has established.
 			key       = {SAR, SAL, album},
 			playcount = -1,
 			rating    = -1,
@@ -390,7 +387,7 @@ query_playcount(Ctx, List=#dbscroll{cnt=Cnt, csel=CSel}) ->
 list_prepend(Ctx, List=#dbscroll{type=list, cnt=Cnt, coffset=COffset, csel=CSel,
 			user_data={Artists, BeforeRev, After}}, NumRequested) ->
 	{NewArtistsRev, BeforeRemRev} =
-				assemble_artists(BeforeRev, NumRequested, []),
+			assemble_artists(BeforeRev, NumRequested * 2, []),
 	NewArtistsOrd = lists:reverse(NewArtistsRev),
 	Prepend       = query_list_artists_songs(NewArtistsOrd, Ctx),
 	NewOffset     = sum_artists(NewArtistsRev),
@@ -412,7 +409,7 @@ list_prepend(Ctx, List=#dbscroll{type=queue, qoffset=QOffset0}, NumRequested) ->
 
 list_append(Ctx, List=#dbscroll{type=list, cnt=Cnt,
 			user_data={Artists, BeforeRev, After}}, NumRequested) ->
-	{NewArtists, AfterRem} = assemble_artists(After, NumRequested, []),
+	{NewArtists, AfterRem} = assemble_artists(After, NumRequested * 2, []),
 	update_total(List#dbscroll{
 		cnt       = Cnt ++ query_list_artists_songs(NewArtists, Ctx),
 		user_data = {Artists, BeforeRev, AfterRem}
@@ -421,7 +418,7 @@ list_append(Ctx, List=#dbscroll{type=queue, cnt=Cnt, qoffset=QOffset0},
 								NumRequested) ->
 	QOffset2 = QOffset0 + length(Cnt),
 	NewQ = query_queue(Ctx, NumRequested, List#dbscroll{qoffset=QOffset2}),
-	NewQ#dbscroll{cnt=Cnt ++ NewQ#dbscroll.cnt}.
+	NewQ#dbscroll{cnt=Cnt ++ NewQ#dbscroll.cnt, qoffset=QOffset0}.
 
 ui_scroll(Ctx, Offset, List=#dbscroll{coffset=COffset,
 		csel=CSel, total=Total, last_query_len=ItemsRequested}) ->

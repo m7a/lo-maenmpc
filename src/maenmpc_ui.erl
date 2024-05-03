@@ -296,14 +296,14 @@ draw_results(Ctx, List=#dbscroll{cnt=Cnt, total=Total,
 				user_data={_CurrentSongID, AbsoluteOffset}}) ->
 	cecho:werase(Ctx#view.wnd_main),
 	{Info, MaxDraw, DY} = draw_results_begin(Ctx, List),
-	{SHeight, SOffset} = scroll_offset_height(AbsoluteOffset, Total,
-								MaxDraw, DY),
+	{SOffset, SHeight} = scroll_offset_height(
+						AbsoluteOffset, Total, MaxDraw),
 	SelVal = lists:foldl(fun({S, Y}, SelIn) ->
 			IsSel = draw_result_line(Ctx, List, {S, Y}, Info),
-			draw_scroll(Ctx, SHeight, SOffset, Y),
+			draw_scroll(Ctx, SHeight, SOffset + DY, Y),
 			case IsSel of true -> S; false -> SelIn end
 		end, none, lists:zip(Cnt, lists:seq(DY, length(Cnt) + DY - 1))),
-	lists:foreach(fun(Y) -> draw_scroll(Ctx, SHeight, SOffset, Y) end,
+	lists:foreach(fun(Y) -> draw_scroll(Ctx, SHeight, SOffset + DY, Y) end,
 				lists:seq(length(Cnt) + DY, MaxDraw)),
 	cecho:wrefresh(Ctx#view.wnd_main),
 	case SelVal of
@@ -322,16 +322,19 @@ draw_results_begin(Ctx, #dbscroll{type=queue}) ->
 draw_results_begin(Ctx, #dbscroll{type=list}) ->
 	{max(1, Ctx#view.width - 24), max(0, main_height(Ctx)), 0}.
 
-scroll_offset_height(DOffset, Total, MaxDraw, DY) ->
-	SHeight = max(1, min(MaxDraw, MaxDraw * MaxDraw div max(1, Total))),
-	% TODO USE VARIANT DESIGNED ON PAPER --- CURENT ONE IS CONVOLUTED AND ALMOST WORKS - ONLY ONE MINOR CONCERN WRT SCROLLING: AT END THE LOWER BOUND MAY VANISH OFF SCREEN, MUST STOP EARLY ENOUGH...! - 
-	SOffset = case DY + (DOffset * MaxDraw div max(Total, 1)) of
-			DY when DOffset /= 0 -> DY + 1;
-			Value when DOffset + MaxDraw < Total ->
-				min(Value, max(0, MaxDraw - SHeight - 1));
-			Value -> Value
-		end,
-	{SHeight, SOffset}.
+scroll_offset_height(DOffset, Total, MaxDraw) ->
+	SHeight = min(MaxDraw, MaxDraw * MaxDraw div max(1, Total)),
+	SOffsetRaw = max(0, DOffset * (MaxDraw - SHeight) div max(1, Total)),
+	if
+	DOffset /= 0 andalso SOffsetRaw == 0 ->
+		{SOffsetRaw + 1, SHeight};
+	SOffsetRaw + SHeight >= MaxDraw andalso Total - DOffset > MaxDraw ->
+		{MaxDraw - SHeight - 1, SHeight};
+	SOffsetRaw + SHeight >= MaxDraw ->
+		{MaxDraw - SHeight, SHeight};
+	true ->
+		{SOffsetRaw, SHeight}
+	end.
 
 draw_result_line(Ctx, #dbscroll{type=queue, csel=CSel,
 				user_data={CurrentSongID, _AbsoluteOffset}},
