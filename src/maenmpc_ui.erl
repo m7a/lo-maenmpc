@@ -159,6 +159,9 @@ handle_cast({getch, Character}, Ctx) ->
 					{ui_query, queue, main_height(Ctx) - 1});
 		?ceKEY_F(4)   -> ui_request(Ctx#view{page=list},
 					{ui_query, list, main_height(Ctx)});
+		?ceKEY_F(7)   ->
+			% TODO HACK
+			gen_server:cast(maenmpc_radio, {radio_start, m16}), Ctx;
 		?ceKEY_F(10)  -> init:stop(0), Ctx;
 		?ceKEY_RESIZE -> ui_resize(Ctx);
 		_Any          -> Ctx

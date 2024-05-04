@@ -7,8 +7,7 @@ start(Parent, MPDName, Config) ->
 	{ok, spawn_link(?MODULE, enter, [Parent, MPDName, Config])}.
 
 enter(Parent, MPDName, Config) ->
-	{Host, Port} = proplists:get_value(ip, Config),
-	case erlmpd:connect(Host, Port) of
+	case maenmpc_erlmpd:connect(Config) of
 	{ok, Conn} ->
 		gen_server:cast(Parent, {mpd_assign, MPDName, Conn}),
 		run(Parent, MPDName, Conn);

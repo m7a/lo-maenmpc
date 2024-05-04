@@ -122,6 +122,11 @@ handle_call({query_artists, QList, Filter}, _From, Ctx) ->
 					[Filter, {tagop, artist, eq, Artist}]})]
 		|| Artist <- QList]
 	end), Ctx};
+handle_call({enqueue, Song}, _From, Ctx) ->
+	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
+
+		ok = erlmpd:add(Conn, element(Ctx#spl.idx, Song#dbsong.uris))
+	end), Ctx};
 % TODO ALL OTHER INTERACTIVE FUNCTION STUFF GOES HERE...
 handle_call(_Call, _From, Ctx) ->
 	{reply, ok, Ctx}.
@@ -147,7 +152,8 @@ update_playing_info(Name, Conn, Ctx) ->
 parse_metadata(CurrentSong, Ctx) ->
 	case proplists:get_value(file, CurrentSong) of
 	undefined -> epsilon_song(Ctx#spl.len);
-	_ValidVal -> erlmpd_to_dbsong(CurrentSong, Ctx)
+	_ValidVal -> maenmpc_erlmpd:to_dbsong(CurrentSong,
+						Ctx#spl.idx, Ctx#spl.len)
 	end.
 
 query_rating(DBCMP, Conn, Ctx) ->
@@ -174,55 +180,13 @@ update_status(Status, Ctx) ->
 		mpd_consume = proplists:get_value(consume, Status, false),
 		mpd_xfade   = proplists:get_value(xfade,   Status, 0)}.
 
-erlmpd_to_dbsong(Entry, Ctx) ->
-	#dbsong{key          = erlmpd_to_key(Entry),
-		uris         = new_tuple(proplists:get_value(file, Entry), Ctx),
-		playcount    = -1,
-		rating       = ?RATING_UNRATED,
-		duration     = proplists:get_value('Time',  Entry, 1),
-		year         = proplists:get_value('Date',  Entry, <<>>),
-		trackno      = proplists:get_value('Track', Entry, 0),
-		audios       = new_tuple(proplists:get_value('Format', Entry,
-								<<>>), Ctx),
-		playlist_id  = proplists:get_value('Id', Entry, -1)}.
-
-new_tuple(Value, Ctx) ->
-	list_to_tuple([case Idx =:= Ctx#spl.idx of
-		true  -> normalize_always(Value);
-		false -> <<>>
-	end || Idx <- lists:seq(1, Ctx#spl.len)]).
-
-erlmpd_to_key(Entry) ->
-	{normalize_key(proplists:get_value('Artist',   Entry, <<>>)),
-	 normalize_strong(proplists:get_value('Album', Entry, <<>>)),
-	 normalize_key(proplists:get_value('Title',    Entry, <<>>))}.
-
-% Expensive normalization option required due to the fact that scrobbling or
-% Maloja seem to mess with the supplied metadata.
-normalize_key(Value) ->
-	normalize_always(normalize_safe(Value)).
-
-normalize_safe(Value) ->
-	re:replace(string:replace(string:replace(
-				lists:join(<<" ">>, string:lexemes(Value, " ")),
-			"[", "("), "]", ")"),
-		" \\(?feat\\.? .*$", "").
-
-normalize_always(Value) ->
-	unicode:characters_to_nfc_binary(Value).
-
-normalize_strong(Value) ->
-	normalize_always(re:replace(normalize_safe(Value), " \\(.*\\)$", "")).
-
 rating_for_uri(RatingURI, Conn) ->
 	case erlmpd:sticker_get(Conn, "song", binary_to_list(RatingURI),
 								"rating") of
 	% Typically error just means not found here (OK)
 	{error, _Any} -> ?RATING_UNRATED;
-	ProperRating  -> case list_to_integer(ProperRating) of
-			 1      -> 0;
-			 NotOne -> NotOne * 10
-			 end
+	ProperRating  -> maenmpc_erlmpd:convert_rating(
+						list_to_integer(ProperRating))
 	end.
 
 ui_simple_tx(stop, Conn, _Ctx) ->

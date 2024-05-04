@@ -38,9 +38,9 @@ run(MPDList, PrimaryRatings, Maloja, RadioConf) ->
 usage() ->
 	io:fwrite(
 "USAGE $0 foreground                          -- run regularly~n" ++
-"USAGE $0 foregorund -help                    -- this page~n" ++
-"USAGE $0 foregorund -radio [MPDNAME]         -- play custom music radio~n" ++
-"USAGE $0 foregorund -mpdsticker -gmbrc GMBRC -- import ratings~n" ++
+"USAGE $0 foreground -help                    -- this page~n" ++
+"USAGE $0 foreground -radio [MPDNAME]         -- play custom music radio~n" ++
+"USAGE $0 foreground -mpdsticker -gmbrc GMBRC -- import ratings~n" ++
 "USAGE $0 foreground -scrobble   -gmbrc GMBRC -- import playcounts~n"
 	).
 
