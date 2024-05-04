@@ -220,21 +220,46 @@ proc_range_result(Ctx, RangeResult,
 	list  -> Ctx#mpl{current_list =List3}
 	end.
 
-list_replace(Ctx, List=#dbscroll{type=list,
-			coffset=COffset, csel=CSel, last_query_len=NReq}) ->
-	% TODO THIS ROUTINE IS INCOMPLETE - IT SHOULD WORK FOR THE “INITIAL” QUERY BUT FOR SUBSEQUENT QUERIES IT MUST BE POSSIBLE TO E.G. SET THE OFFSET TO A HIGH LOCATION AND THEN “QUERY AROUND” THAT OFFSET. MAYBE NEED SOMETHING LIKE “DIVIDE LIST BY PRED” EXCEPT THAT IT DIVIDES BY SURPASSING A CERTAIN COUNTER VALUE. OTHERWISE THE “PREFIX” OF ARTISTS IS ALWAYS GOING TO BE EMPTY...
-	Artists = merge_artists([call_singleplayer(Name, {query_artists_count,
-							Ctx#mpl.current_filter})
-					|| Name <- get_active_players(Ctx)]),
-	{Selected, Remaining} = assemble_artists(Artists, NReq * 3, []),
-	Cnt = query_list_artists_songs(Selected, Ctx),
-	HaveCnt = length(Cnt),
+list_replace(Ctx, List=#dbscroll{type=list, cnt=OldCnt,
+					csel=CSel, last_query_len=NReq}) ->
+	{ArtistBefore, PrefixLRev} =
+		case CSel >= 0 andalso CSel < length(OldCnt) of
+		true  -> SelBefore = lists:nth(CSel, OldCnt),
+			 {element(1, SelBefore#dbsong.key),
+				lists:reverse(lists:sublist(OldCnt, CSel))};
+		false -> {<<>>, []}
+		end,
+	% OIAB := Offset In Artist Before
+	OIABefore = count_while(ArtistBefore, PrefixLRev, 0),
+	Artists = query_all_artists(Ctx),
+	{BeforeRev1, IncAfterArtists} =
+		% When there is a degenerate result with no match, everything
+		% comes out in the first part. For the remainder of the routine
+		% to process it correctly, we then have to swap it and pass it
+		% off as a “second part”.
+		case divide_list_by_pred_r1(fun({Name, _Songs}) ->
+					Name =:= ArtistBefore end, Artists) of
+		{FirstRevOnly, []} -> {[], lists:reverse(FirstRevOnly)};
+		Other              -> Other
+		end,
+	{BeforeRev2, Selected, Remaining, OIAB2} =
+		case assemble_artists(IncAfterArtists, NReq * 3, []) of
+		{S1a, R1, M} when M =< 0 ->
+			{BeforeRev1, S1a, R1, OIABefore};
+		{S1b, [], N} ->
+			{BR2, RR, ReqRem2} = assemble_artists(
+							BeforeRev1, N, []),
+			{RR, lists:reverse(BR2) ++ S1b, [],
+							OIABefore + N - ReqRem2}
+		end,
+	NewCnt = query_list_artists_songs(Selected, Ctx),
+	HaveCnt = length(NewCnt),
 	update_total(List#dbscroll{
-		cnt       = Cnt,
-		coffset   = max(0, min(HaveCnt - NReq * 3,     COffset)),
-		csel      = max(0, min(HaveCnt - NReq * 2 + 1, CSel)),
-		qoffset   = 0,
-		user_data = {Artists, [], Remaining}
+		cnt     = NewCnt,
+		coffset = max(0, min(HaveCnt - NReq * 3,     OIAB2)),
+		csel    = max(0, min(HaveCnt - NReq * 2 + 1, OIAB2)),
+		qoffset = sum_artists(BeforeRev2),
+		user_data = {Artists, BeforeRev2, Remaining}
 	});
 list_replace(Ctx, List=#dbscroll{type=queue, coffset=COffset, qoffset=QOffset0,
 					last_query_len=ItemsRequested}) ->
@@ -267,6 +292,10 @@ get_active_players(Ctx) ->
 		end
 	end, Ctx#mpl.mpd_list).
 
+query_all_artists(Ctx) ->
+	merge_artists([call_singleplayer(Name, {query_artists_count,
+		Ctx#mpl.current_filter}) || Name <- get_active_players(Ctx)]).
+
 merge_artists(ArtistsRaw) ->
 	merge_by_criterion(ArtistsRaw,
 			fun(Propl) -> proplists:get_value('Artist', Propl) end,
@@ -294,8 +323,25 @@ merge_by_criterion(ListRaw, GetKeyCB, Epsilon, ExtractCB, FinalizeCB) ->
 			Tails, GetKeyCB, Epsilon, ExtractCB, FinalizeCB)]
 	end.
 
+count_while(_Artist, [], Acc) -> Acc;
+count_while(Artist, [H|_T], Acc) when element(1, H#dbsong.key) =/= Artist -> Acc;
+count_while(Artist, [_H|T], Acc) -> count_while(Artist, T, Acc + 1).
+
+% Split list by predicate and return a tuple with exactly two lists
+% First list contains all items before the predicate matches (excl) in reverse
+% oder! Second list contains all items after the predicate matches (incl)
+divide_list_by_pred_r1(Predicate, List) ->
+	divide_list_by_pred_r1(Predicate, List, {[], []}).
+divide_list_by_pred_r1(_Predicate, [], {PreAcc, PostAcc}) ->
+	{PreAcc, lists:reverse(PostAcc)};
+divide_list_by_pred_r1(Predicate, [H|T], {PreAcc, PostAcc}) ->
+	case PostAcc =/= [] orelse Predicate(H) of
+	true  -> divide_list_by_pred_r1(Predicate, T, {PreAcc, [H|PostAcc]});
+	false -> divide_list_by_pred_r1(Predicate, T, {[H|PreAcc], PostAcc})
+	end.
+
 assemble_artists(Artists, NReq, Acc) when NReq =< 0 orelse Artists =:= [] ->
-	{lists:reverse(Acc), Artists};
+	{lists:reverse(Acc), Artists, NReq};
 assemble_artists([Artist={_Name, Songs}|Others], NReq, Acc) ->
 	assemble_artists(Others, NReq - Songs, [Artist|Acc]).
 
@@ -386,7 +432,7 @@ query_playcount(Ctx, List=#dbscroll{cnt=Cnt, csel=CSel}) ->
 
 list_prepend(Ctx, List=#dbscroll{type=list, cnt=Cnt, coffset=COffset, csel=CSel,
 			user_data={Artists, BeforeRev, After}}, NumRequested) ->
-	{NewArtistsRev, BeforeRemRev} =
+	{NewArtistsRev, BeforeRemRev, _ReqRem} =
 			assemble_artists(BeforeRev, NumRequested * 2, []),
 	NewArtistsOrd = lists:reverse(NewArtistsRev),
 	Prepend       = query_list_artists_songs(NewArtistsOrd, Ctx),
@@ -409,7 +455,8 @@ list_prepend(Ctx, List=#dbscroll{type=queue, qoffset=QOffset0}, NumRequested) ->
 
 list_append(Ctx, List=#dbscroll{type=list, cnt=Cnt,
 			user_data={Artists, BeforeRev, After}}, NumRequested) ->
-	{NewArtists, AfterRem} = assemble_artists(After, NumRequested * 2, []),
+	{NewArtists, AfterRem, _ReqRem} = assemble_artists(After,
+							NumRequested * 2, []),
 	update_total(List#dbscroll{
 		cnt       = Cnt ++ query_list_artists_songs(NewArtists, Ctx),
 		user_data = {Artists, BeforeRev, AfterRem}

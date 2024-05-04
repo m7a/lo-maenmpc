@@ -11,7 +11,7 @@
 <property name="mdpc.depends"    value="erlang-jiffy, erlang-inets"/>
 <property name="mdpc.bdep"       value="rebar3"/>
 <property name="mdpc.descrl">
- Experimental Audio Player Stuff
+ Experimental Audio Player
 </property>
 <!-- TODO NEED TO PROPERLY SPECIFY DEPENDENCY LICENSES -->
 
@@ -30,9 +30,10 @@ cecho-0.6.0/src /usr/lib/erlang/lib/cecho-0.6.0
 <property name="masysma.internal.includepath" location="${masysma.internal.includepath.rel}"/>
 
 <!-- SPECIFIC BUILD -->
-<target name="download">
+<!-- TODO DIST CLEAN IS A WORKAROUND... -->
+<target name="download" depends="dist-clean">
 	<mkdir dir="_checkouts"/>
-	<!-- TODO CURRENTLY REQUIRES CUSTOM PATCHES / MAYBE WE CAN GET THEM UPSTREAM LATER? -->
+	<!-- TODO SWITCH TO MASYSMA VARIANT! -->
 	<masysma_require_artifact
 			masysmaartifact="erlmpd.git"
 			masysmaatarget="_checkouts/erlmpd"
@@ -56,6 +57,15 @@ cecho-0.6.0/src /usr/lib/erlang/lib/cecho-0.6.0
 	<exec executable="rebar3" failonerror="true">
 		<arg value="clean"/>
 	</exec>
+</target>
+
+<target name="dist-clean">
+	<delete dir="_build" followSymlinks="false"
+					includeemptydirs="true"
+					removeNotFollowedSymlinks="true"/>
+	<delete dir="_checkouts" followSymlinks="false"
+					includeemptydirs="true"
+					removeNotFollowedSymlinks="true"/>
 </target>
 
 <!-- CI INTEGRATION / currently disabled. commenting out is not enough.... -->

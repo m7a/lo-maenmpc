@@ -95,8 +95,9 @@ wnd_static_draw(Ctx) ->
 		cecho:waddstr(Ctx#view.wnd_keys, io_lib:format("~-6s", [Msg])),
 		cecho:attroff(Ctx#view.wnd_keys, Atts)
 	end, [
-		{1, "Help"},   {2, "Queue"}, {3, "Tree"}, {4, "List"},
-		{5, "Search"}, {6, "Radio"}, {7, "Info"}, {8, "Output"},
+		% Planned assignments: {3, "Tree"}, {7, "Info"}
+		{1, "Help"},   {2, "Queue"}, {3, ""}, {4, "List"},
+		{5, "Search"}, {6, "Radio"}, {7, ""}, {8, "Output"},
 		{9, ""},       {0, "Quit"}
 	]),
 	cecho:wrefresh(Ctx#view.wnd_keys),
@@ -152,17 +153,12 @@ handle_cast({getch, Character}, Ctx) ->
 		$x            -> ui_request(Ctx, {ui_simple, toggle_xfade});
 		?ceKEY_UP     -> ui_scroll(Ctx, -1);
 		?ceKEY_DOWN   -> ui_scroll(Ctx, +1);
-		% TODO CONVOLUTED...
-		?ceKEY_PGDOWN -> ui_scroll(Ctx, main_height(Ctx) -
-					case Ctx#view.page =:= queue of
-					true -> 1; false -> 0 end);
-		?ceKEY_PGUP   -> ui_scroll(Ctx, case Ctx#view.page =:= queue of
-					true -> 1; false -> 0 end -
-					main_height(Ctx));
+		?ceKEY_PGDOWN -> ui_scroll(Ctx, +current_page_height(Ctx));
+		?ceKEY_PGUP   -> ui_scroll(Ctx, -current_page_height(Ctx));
 		?ceKEY_F(2)   -> ui_request(Ctx#view{page=queue},
 					{ui_query, queue, main_height(Ctx) - 1});
 		?ceKEY_F(4)   -> ui_request(Ctx#view{page=list},
-					{ui_query, list, main_height(Ctx) - 1});
+					{ui_query, list, main_height(Ctx)});
 		?ceKEY_F(10)  -> init:stop(0), Ctx;
 		?ceKEY_RESIZE -> ui_resize(Ctx);
 		_Any          -> Ctx
@@ -419,11 +415,18 @@ draw_sel(Ctx, S) ->
 	cecho:wrefresh(Ctx#view.wnd_sel_card),
 	Ctx.
 
+current_page_height(Ctx) ->
+	case Ctx#view.page of
+	queue -> main_height(Ctx) - 1;
+	list  -> main_height(Ctx)
+	end.
+
 ui_scroll(Ctx, Offset) ->
 	case Ctx#view.page of
 	queue  -> ui_request(Ctx, {ui_scroll, queue, Offset,
-							main_height(Ctx) - 1});
-	list   -> ui_request(Ctx, {ui_scroll, list, Offset, main_height(Ctx)});
+						current_page_height(Ctx)});
+	list   -> ui_request(Ctx, {ui_scroll, list, Offset,
+						current_page_height(Ctx)});
 	_Other -> Ctx % scrolling currently not supported for other views
 	end.
 
