@@ -1,6 +1,6 @@
 -module(maenmpc_erlmpd).
 -export([connect/1, to_dbsong/3, normalize_key/1, normalize_always/1,
-	normalize_strong/1, merge_tuple/2, convert_rating/1]).
+	normalize_strong/1, merge_tuple/2, convert_rating/1, format_rating/1]).
 -include_lib("maenmpc_db.hrl").
 
 connect(Config) ->
@@ -60,3 +60,11 @@ merge_tuple(T1, T2) ->
 
 convert_rating(1)      -> 0;
 convert_rating(NotOne) -> NotOne * 10.
+
+format_rating(?RATING_UNRATED) ->
+	"- - -";
+format_rating(?RATING_ERROR) ->
+	"!ERR!";
+format_rating(Rating) ->
+	NumStars = Rating div 20,
+	lists:duplicate(NumStars, $*) ++ lists:duplicate(5 - NumStars, $.).

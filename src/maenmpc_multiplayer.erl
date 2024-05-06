@@ -7,7 +7,8 @@
 	ui, radio, alsa, mpd_list, mpd_active,
 	%mpd_ratings, % TODO UNUSED MAY NEED IT TO EDIT RATING!
 	maloja,
-	current_song, current_queue, current_list, current_filter
+	current_song, current_queue, current_list, current_radio,
+	current_filter
 }).
 
 init([NotifyToUI, NotifyToRadio]) ->
@@ -37,6 +38,9 @@ init([NotifyToUI, NotifyToRadio]) ->
 		current_list   = #dbscroll{type=list, cnt=[], coffset=0,
 					csel=0, total=-1, last_query_len=0,
 					qoffset=0, user_data={[], [], []}},
+		current_radio  = #dbscroll{type=radio, cnt=[], coffset=0,
+					csel=0, total=0, last_query_len=0,
+					qoffset=0, user_data=-1},
 		current_filter = {lnot, {land, [{tagop, artist, eq, ""},
 						{tagop, album,  eq, ""},
 						{tagop, title,  eq, ""}]}}
@@ -92,14 +96,16 @@ handle_cast({ui_scroll, Action, Offset, ItemsRequested}, Ctx) ->
 handle_cast({mpd_assign_error, Name, Reason}, Ctx) ->
 	gen_server:cast(Ctx#mpl.ui, {db_error, {offline, Name, Reason}}),
 	{noreply, Ctx};
-handle_cast({radio_enqueue, DBSong}, Ctx) ->
-	% TODO ADJUST SELECTION TO HIGHLIGHT THIS SONG IN RADIO QUEUE
+handle_cast({radio_enqueue, DBSong}, Ctx=#mpl{current_radio=Radio}) ->
 	call_singleplayer(Ctx#mpl.mpd_active, {enqueue, DBSong}),
-	{noreply, Ctx};
-handle_cast({radio_log, ID, Info}, Ctx) ->
-	% TODO SEND TO GUI/SCROLLABLE AND SELECTABLE BUFFER
-	error_logger:info_msg(io_lib:format("RADIOLOG [~5w] ~s", [ID, Info])),
-	{noreply, Ctx};
+	NewRadio = Radio#dbscroll{user_data=DBSong#dbsong.playlist_id},
+	transform_and_send_to_ui(Ctx, NewRadio, NewRadio#dbscroll.user_data),
+	{noreply, Ctx#mpl{current_radio=NewRadio}};
+handle_cast({radio_log, ID, Info}, Ctx=#mpl{current_radio=Radio}) ->
+	NewRadio = Radio#dbscroll{total=Radio#dbscroll.total + 1,
+				cnt=Radio#dbscroll.cnt ++ [{ID, Info}]},
+	transform_and_send_to_ui(Ctx, NewRadio, NewRadio#dbscroll.user_data),
+	{noreply, Ctx#mpl{current_radio=NewRadio}};
 handle_cast(_Cast, Ctx) ->
 	{noreply, Ctx}.
 
@@ -147,14 +153,18 @@ merge_song_info(Song, Other) ->
 			end
 	}.
 
+transform_and_send_to_ui(Ctx, List) ->
+	transform_and_send_to_ui(Ctx, List,
+				Ctx#mpl.current_song#dbsong.playlist_id).
+
 transform_and_send_to_ui(Ctx, List2=#dbscroll{cnt=Cnt, coffset=COffset,
-			csel=CSel, last_query_len=LLen, qoffset=QOffset0}) ->
+				csel=CSel, last_query_len=LLen,
+				qoffset=QOffset0}, CurrentSongID) ->
 	gen_server:cast(Ctx#mpl.ui, {db_results, List2#dbscroll{
 		cnt       = lists:sublist(Cnt, COffset + 1, LLen),
 		coffset   = 0,
 		csel      = CSel - COffset,
-		user_data = {Ctx#mpl.current_song#dbsong.playlist_id,
-				QOffset0 + COffset}
+		user_data = {CurrentSongID, QOffset0 + COffset}
 	}}).
 
 % $ cat /proc/asound/card0/pcm0p/sub0/hw_params
@@ -184,7 +194,8 @@ query_alsa(ALSA) ->
 ui_items_requested(Ctx, Action, ItemsRequested) ->
 	case Action of
 	queue -> Ctx#mpl.current_queue#dbscroll{last_query_len=ItemsRequested};
-	list  -> Ctx#mpl.current_list #dbscroll{last_query_len=ItemsRequested}
+	list  -> Ctx#mpl.current_list #dbscroll{last_query_len=ItemsRequested};
+	radio -> Ctx#mpl.current_radio#dbscroll{last_query_len=ItemsRequested}
 	end.
 
 ui_query(Ctx, List) ->
@@ -194,12 +205,16 @@ check_in_range(#dbscroll{cnt=Cnt, coffset=COffset, total=Total,
 					last_query_len=R, qoffset=QOffset}) ->
 	Len = length(Cnt),
 	if
-	COffset < 0 orelse  Len - COffset < R  -> out_of_range;
+	COffset < 0 orelse Len - COffset < R -> out_of_range;
 	COffset =< R andalso QOffset /= 0 -> {in_range, query_before};
 	Len - COffset =< (2 * R) andalso Len < Total -> {in_range, query_after};
 	true -> {in_range, ok}
 	end.
 
+proc_range_result(Ctx, _AnyRangeResult, List=#dbscroll{type=radio,
+							user_data=Idx}) ->
+	transform_and_send_to_ui(Ctx, List, Idx),
+	Ctx#mpl{current_radio=List};
 proc_range_result(Ctx, RangeResult,
 			List=#dbscroll{last_query_len=ItemsRequested}) ->
 	List2 = case RangeResult of
@@ -396,7 +411,8 @@ sum_artists(Artists) ->
 	lists:foldl(fun({_Artist, Songs}, Acc) -> Songs + Acc end, 0, Artists).
 
 query_playcount(Ctx, List) when Ctx#mpl.maloja =:= {none, none} orelse
-					length(List#dbscroll.cnt) =:= 0 ->
+			length(List#dbscroll.cnt) < 0 orelse
+			length(List#dbscroll.cnt) < List#dbscroll.csel ->
 	List;
 query_playcount(Ctx, List=#dbscroll{cnt=Cnt, csel=CSel}) ->
 	Prefix = lists:sublist(Cnt, 1, CSel),

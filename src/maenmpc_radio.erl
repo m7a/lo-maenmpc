@@ -150,9 +150,10 @@ foldl_all(Func, Acc, MPD, Idx, Ctx1) ->
 	{ok, Conn}    = maenmpc_erlmpd:connect(proplists:get_value(MPD,
 							Ctx1#rr.mpd_list)),
 	RV = lists:foldl(
-		fun(RawEntry, Acc) ->
+		fun(RawEntry, Acc2) ->
 			PLS = maenmpc_erlmpd:to_dbsong(RawEntry, Idx, Len),
-			Func(PLS#dbsong{rating=DefaultRating, playcount=0}, Acc)
+			Func(PLS#dbsong{rating=DefaultRating, playcount=0},
+									Acc2)
 		end,
 		Acc,
 		erlmpd:find(Conn, {lnot, {land, [
@@ -313,10 +314,10 @@ schedule_compute(Ctx0=#rr{tbl=Conf}) ->
 									Ctx7),
 	lists:foldl(fun(ID, CtxI) ->
 		[Entry] = ets:lookup(plsongs, ID),
-		CtxI1 = log(io_lib:format("R~3w C~4w ~s - ~s",
-				[Entry#dbsong.rating, Entry#dbsong.playcount,
-				element(1, Entry#dbsong.key),
-				element(3, Entry#dbsong.key)]), CtxI),
+		CtxI1 = log(io_lib:format("~s ~4w ~s - ~s",
+			[maenmpc_erlmpd:format_rating(Entry#dbsong.rating),
+			Entry#dbsong.playcount, element(1, Entry#dbsong.key),
+			element(3, Entry#dbsong.key)]), CtxI),
 		% Yes, its inefficient here but other ways would be much more
 		% convoluted! Need to assign log ID to entry and keep it all
 		% in order because log has a side-effect!

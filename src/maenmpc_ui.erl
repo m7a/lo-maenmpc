@@ -156,9 +156,11 @@ handle_cast({getch, Character}, Ctx) ->
 		?ceKEY_PGDOWN -> ui_scroll(Ctx, +current_page_height(Ctx));
 		?ceKEY_PGUP   -> ui_scroll(Ctx, -current_page_height(Ctx));
 		?ceKEY_F(2)   -> ui_request(Ctx#view{page=queue},
-					{ui_query, queue, main_height(Ctx) - 1});
+					{ui_query, queue, main_height(Ctx)-1});
 		?ceKEY_F(4)   -> ui_request(Ctx#view{page=list},
-					{ui_query, list, main_height(Ctx)});
+					{ui_query, list,  main_height(Ctx)});
+		?ceKEY_F(6)   -> ui_request(Ctx#view{page=radio},
+					{ui_query, radio, main_height(Ctx)});
 		?ceKEY_F(7)   ->
 			% TODO HACK
 			gen_server:cast(maenmpc_radio, {radio_start, m16}), Ctx;
@@ -250,7 +252,7 @@ draw_basic_song_info(WndSong, DBE, Y0) ->
 			io_lib:format("~2..0w - ~s",
 			[DBE#dbsong.trackno, element(3, DBE#dbsong.key)]))),
 	cecho:mvwaddstr(WndSong, 1, PadWidth - 4,
-			format_rating(DBE#dbsong.rating)),
+			maenmpc_erlmpd:format_rating(DBE#dbsong.rating)),
 	PadWidth.
 
 utf8pad(Pad, Str) ->
@@ -260,14 +262,6 @@ utf8pad(Pad, Str) ->
 	false -> io_lib:format("~s~" ++ integer_to_list(Pad - SL) ++ "s",
 								[Str, ""])
 	end.
-
-format_rating(?RATING_UNRATED) ->
-	"- - -";
-format_rating(?RATING_ERROR) ->
-	"!ERR!";
-format_rating(Rating) ->
-	NumStars = Rating div 20,
-	lists:duplicate(NumStars, $*) ++ lists:duplicate(5 - NumStars, $.).
 
 progress(PadWidth, Pos, OfTime) ->
 	BarWidth  = PadWidth - 14,
@@ -319,7 +313,9 @@ draw_results_begin(Ctx, #dbscroll{type=queue}) ->
 	cecho:mvwaddstr(Ctx#view.wnd_main, 0, Ctx#view.width - 1, "_"),
 	{{WA, WT}, max(0, main_height(Ctx) - 1), 1};
 draw_results_begin(Ctx, #dbscroll{type=list}) ->
-	{max(1, Ctx#view.width - 24), max(0, main_height(Ctx)), 0}.
+	{max(1, Ctx#view.width - 24), max(0, main_height(Ctx)), 0};
+draw_results_begin(Ctx, #dbscroll{type=radio}) ->
+	{max(1, Ctx#view.width - 3),  max(0, main_height(Ctx)), 0}.
 
 scroll_offset_height(DOffset, Total, MaxDraw) ->
 	SHeight = min(MaxDraw, MaxDraw * MaxDraw div max(1, Total)),
@@ -347,7 +343,7 @@ draw_result_line(Ctx, #dbscroll{type=queue, csel=CSel,
 	cecho:mvwaddstr(Ctx#view.wnd_main, Y, 0,
 		io_lib:format("~c ~s  ~s  ~s  ~2..0w:~2..0w",
 		[case IsCurrent of true -> $>; false -> $ end,
-		format_rating(S#dbsong.rating),
+		maenmpc_erlmpd:format_rating(S#dbsong.rating),
 		utf8pad(WA, element(1, S#dbsong.key)),
 		utf8pad(WT, element(3, S#dbsong.key)),
 		S#dbsong.duration div 60,
@@ -369,13 +365,32 @@ draw_result_line(Ctx, #dbscroll{type=list, csel=CSel}, {S, Y}, WT) ->
 		cecho:mvwaddstr(Ctx#view.wnd_main, Y, 2,
 			io_lib:format("~2..0w  ~s  ~s  ~2..0w:~2..0w",
 			[S#dbsong.trackno,
-			format_rating(S#dbsong.rating),
+			maenmpc_erlmpd:format_rating(S#dbsong.rating),
 			utf8pad(WT, Title),
 			S#dbsong.duration div 60,
 			S#dbsong.duration rem 60])),
 		cecho:attroff(Ctx#view.wnd_main, Atts)
 	end,
-	IsSel.
+	IsSel;
+draw_result_line(Ctx, #dbscroll{type=radio, csel=CSel,
+				user_data={CurrentLogID, _AbsoluteOffset}},
+		{{ID, Line}, Y}, WT) ->
+	IsCurrent = CurrentLogID =:= ID,
+	IsSel = Y =:= CSel,
+	Atts = case IsSel of
+		true  -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT_SEL);
+		false -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT)
+		end bor case IsCurrent of
+		true  -> ?ceA_BOLD;
+		false -> 0
+		end,
+	cecho:attron(Ctx#view.wnd_main, Atts),
+	cecho:mvwaddstr(Ctx#view.wnd_main, Y, 0, utf8pad(WT, Line)),
+	cecho:attroff(Ctx#view.wnd_main, Atts),
+	% We must not permit the default logic to draw the “sel” info here
+	% [would be interesting wrt. viewing full info for truncated messages]
+	% TODO x FACTOR OUT SPECIAL RADIO MODE EVEN?
+	false.
 
 uris_to_cpair(S, IsSel) ->
 	case S#dbsong.uris of
@@ -420,17 +435,15 @@ draw_sel(Ctx, S) ->
 
 current_page_height(Ctx) ->
 	case Ctx#view.page of
-	queue -> main_height(Ctx) - 1;
-	list  -> main_height(Ctx)
+	queue  -> main_height(Ctx) - 1;
+	_Other -> main_height(Ctx)
 	end.
 
-ui_scroll(Ctx, Offset) ->
-	case Ctx#view.page of
-	queue  -> ui_request(Ctx, {ui_scroll, queue, Offset,
+ui_scroll(Ctx=#view{page=PG}, Offset) ->
+	case (PG =:= queue orelse PG =:= list orelse PG =:= radio) of
+	true  -> ui_request(Ctx, {ui_scroll, PG, Offset,
 						current_page_height(Ctx)});
-	list   -> ui_request(Ctx, {ui_scroll, list, Offset,
-						current_page_height(Ctx)});
-	_Other -> Ctx % scrolling currently not supported for other views
+	false -> Ctx
 	end.
 
 ui_resize(Ctx) ->
