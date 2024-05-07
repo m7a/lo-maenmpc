@@ -31,7 +31,7 @@ init([NotifyToUI, NotifyToRadio]) ->
 		mpd_active     = MPDFirst,
 		%mpd_ratings   = PrimaryRatings,
 		maloja         = maenmpc_maloja:conn(Maloja),
-		current_song   = #dbsong{key={<<>>, <<>>, <<>>}},
+		current_song   = maenmpc_erlmpd:epsilon_song(length(MPDList)),
 		current_queue  = #dbscroll{type=queue, cnt=[], coffset=0,
 					csel=0, total=-1, qoffset=0,
 					last_query_len=0, user_data=none},

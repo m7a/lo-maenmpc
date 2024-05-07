@@ -26,13 +26,8 @@ init(Properties) ->
 		mpd_consume = false,
 		mpd_xfade   = 0
 	},
-	{ok, InitialState#spl{current_song=epsilon_song(InitialState#spl.len)}}.
-
-epsilon_song(NumPlayers) ->
-	EpsTPL = list_to_tuple(lists:duplicate(NumPlayers, <<>>)),
-	#dbsong{key={<<>>, <<>>, <<>>}, uris=EpsTPL, playcount=-1, rating=-1,
-			duration=1, year = <<>>, trackno=0, audios=EpsTPL,
-			playlist_id=-1}.
+	{ok, InitialState#spl{current_song=maenmpc_erlmpd:epsilon_song(
+							InitialState#spl.len)}}.
 
 % TODO CASE database, playlist, output, sticker?
 %handle_idle(database, Context, _Name) ->
@@ -71,12 +66,12 @@ handle_call({query_by_keys, Keys}, _From, Ctx) ->
 					{tagop, title,  eq, element(3, Key)}]})
 		of
 		% nothing assigned
-		[] -> epsilon_song(Ctx#spl.len);
+		[] -> maenmpc_erlmpd:epsilon_song(Ctx#spl.len);
 		% Single element found -- assign it!
 		[Element|[]] -> query_rating(parse_metadata(Element, Ctx),
 								Conn, Ctx);
 		% result not unique - cannot safely assign
-		[_Element|_Others] -> epsilon_song(Ctx#spl.len)
+		[_Element|_Others] -> maenmpc_erlmpd:epsilon_song(Ctx#spl.len)
 		% else error is fatal because the connection state may
 		% be disrupted.
 		end || Key <- Keys]
@@ -151,7 +146,7 @@ update_playing_info(Name, Conn, Ctx) ->
 
 parse_metadata(CurrentSong, Ctx) ->
 	case proplists:get_value(file, CurrentSong) of
-	undefined -> epsilon_song(Ctx#spl.len);
+	undefined -> maenmpc_erlmpd:epsilon_song(Ctx#spl.len);
 	_ValidVal -> maenmpc_erlmpd:to_dbsong(CurrentSong,
 						Ctx#spl.idx, Ctx#spl.len)
 	end.

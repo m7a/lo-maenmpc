@@ -1,6 +1,7 @@
 -module(maenmpc_erlmpd).
 -export([connect/1, to_dbsong/3, normalize_key/1, normalize_always/1,
-	normalize_strong/1, merge_tuple/2, convert_rating/1, format_rating/1]).
+	normalize_strong/1, merge_tuple/2, convert_rating/1, format_rating/1,
+	epsilon_song/1]).
 -include_lib("maenmpc_db.hrl").
 
 connect(Config) ->
@@ -68,3 +69,9 @@ format_rating(?RATING_ERROR) ->
 format_rating(Rating) ->
 	NumStars = Rating div 20,
 	lists:duplicate(NumStars, $*) ++ lists:duplicate(5 - NumStars, $.).
+
+epsilon_song(NumPlayers) ->
+	EpsTPL = list_to_tuple(lists:duplicate(NumPlayers, <<>>)),
+	#dbsong{key={<<>>, <<>>, <<>>}, uris=EpsTPL, playcount=-1, rating=-1,
+			duration=1, year = <<>>, trackno=0, audios=EpsTPL,
+			playlist_id=-1}.
