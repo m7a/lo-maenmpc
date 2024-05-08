@@ -51,13 +51,14 @@ generate_dynamic_entries(Name, Config, Idx, Len, Ratings) ->
 		},
 		#{
 			id      => SyncIdle,
-			start   => {gen_server, start_link, [{local, SyncIdle},
+			start   => {gen_statem, start_link, [{local, SyncIdle},
 					maenmpc_sync_idle, [Singleplayer], []]}
 		},
 		#{
 			id      => AsyncIdle,
 			restart => transient,
-			start   => {maenmpc_mpd, start,
-						[SyncIdle, Name, Config]}
+			start   => {gen_server, start_link, [{local, AsyncIdle},
+					maenmpc_mpd, [SyncIdle, Name, Config],
+					[]]}
 		}
 	].

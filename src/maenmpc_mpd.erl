@@ -1,26 +1,39 @@
 -module(maenmpc_mpd).
--export([start/3, enter/3, interrupt/1]).
+-behavior(gen_server).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
 
 % async idle
 
-start(Parent, MPDName, Config) ->
-	{ok, spawn_link(?MODULE, enter, [Parent, MPDName, Config])}.
+% in messages:  call mpd_idle_enter
+% out messages: cast mpd_assign, mpd_assign_error, mpd_idle
 
-enter(Parent, MPDName, Config) ->
+init([Parent, Name, Config]) ->
+	S0 = list_to_atom("maenmpc_conn_" ++ atom_to_list(Name)),
 	case maenmpc_erlmpd:connect(Config) of
 	{ok, Conn} ->
-		gen_server:cast(Parent, {mpd_assign, MPDName, Conn}),
-		run(Parent, MPDName, Conn);
+		SO = idle_enter({Parent, Name, Conn, S0}),
+		gen_server:cast(Parent, {mpd_assign, Name, Conn}),
+		{ok, SO};
 	{error, Reason} ->
-		gen_server:cast(Parent, {mpd_assign_error, MPDName, Reason})
+		gen_server:cast(Parent, {mpd_assign_error, Name, Reason}),
+		{stop, ignore}
 	end.
 
-run(Parent, Name, Conn) ->
-	% TODO THERE IS STILL A RACE CONDITION WRT/ NOIDLE: WHAT IF NOIDLE HAPPENS JUST BETWEEN THE RETURN HERE AND THE NEXT RUN? EFFECTIVELY WE WOULD HAVE TO WAIT (UPON INTERRUPT) TO OBSERVE THAT SOMEONE IS LISTENING ON TCP RECV AS TO BE USER THAT THE IDLE COMMAND WAS SENT? / COULD ADD AN IDLE() WITH NOTIFY ONCE SENT CALLBACK THAT WE CAN THEN USE TO UNLOCK THE INTERRUPT FEATURE?
-	ok = gen_server:call(Parent, {mpd_idle, Name, erlmpd:idle(Conn,
-					[database, playlist, player, mixer,
-					output, options, sticker])}),
-	run(Parent, Name, Conn).
+idle_enter(State={_Parent, _Name, Conn, S0}) ->
+	ok = erlmpd:idle_send(Conn, [database, playlist, player, mixer, output,
+							options, sticker]),
+	gen_server:cast(S0, mpd_idle),
+	State.
 
-interrupt(Conn) ->
-	erlmpd:command(Conn, "noidle").
+handle_call(mpd_idle_enter, _From, State) ->
+	{reply, ok, idle_enter(State)};
+handle_call(_Other, _From, State) ->
+	{reply, ok, State}.
+
+handle_cast(mpd_idle, State={Parent, Name, Conn, S0}) ->
+	IdleResult = erlmpd:idle_receive(Conn),
+	ok = gen_server:cast(Parent, {mpd_idle, Name, IdleResult, S0}),
+	{noreply, State}.
+
+handle_info(_Message,    State)         -> {noreply, State}.
+code_change(_OldVersion, State, _Extra) -> {ok,      State}.
