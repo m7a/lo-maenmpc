@@ -282,16 +282,22 @@ list_replace(Ctx, List=#dbscroll{type=list, cnt=OldCnt,
 		qoffset = sum_artists(BeforeRev2),
 		user_data = {Artists, BeforeRev2, Remaining}
 	});
-list_replace(Ctx, List=#dbscroll{type=queue, coffset=COffset, qoffset=QOffset0,
-					last_query_len=ItemsRequested}) ->
-	DOffset = COffset + QOffset0,
-	{QOffset1, NumQuery} = case DOffset < 2 * ItemsRequested of
-		true  -> {0,                  DOffset + 3 * ItemsRequested};
-		false -> {DOffset - 2 * ItemsRequested, 5 * ItemsRequested}
+list_replace(Ctx, List=#dbscroll{type=queue, csel=CSel, qoffset=QOffset0,
+					last_query_len=NReq}) ->
+	AOffset = CSel + QOffset0,
+	{QOffset1, NumQuery} = case AOffset =< 2 * NReq of
+		true  -> {0,                      AOffset + 3 * NReq};
+		false -> {AOffset - 2 * NReq - 1, 5 * NReq}
 	end,
-	query_queue(Ctx, NumQuery, List#dbscroll{qoffset=QOffset1}).
+	% reset total to -1 to force update query number of items from DB!
+	NewQ = query_queue(Ctx, NumQuery, List#dbscroll{qoffset=QOffset1,
+								total=-1}),
+	MaxOffsetAvail = length(NewQ#dbscroll.cnt) - 1,
+	NewSel = max(0, min(MaxOffsetAvail, AOffset - NewQ#dbscroll.qoffset)),
+	NewDraw = max(0, min(MaxOffsetAvail - NReq + 1, NewSel - NReq + 1)), 
+	NewQ#dbscroll{coffset = NewDraw, csel = NewSel}.
 
-query_queue(Ctx, NumQuery, List) ->
+query_queue(Ctx, NumQuery, List=#dbscroll{csel=PreSel}) ->
 	InstancesToQuery = lists:filtermap(fun({Name, _Idx}) ->
 			case Name /= Ctx#mpl.mpd_active andalso
 					call_singleplayer(Name, is_online) of
@@ -299,9 +305,10 @@ query_queue(Ctx, NumQuery, List) ->
 			false -> false
 			end
 		end, Ctx#mpl.mpd_list),
+	% delete content to avoid large transfer
 	Prelim = call_singleplayer(Ctx#mpl.mpd_active, {query_queue,
-							NumQuery, List}),
-	Prelim#dbscroll{cnt=lists:foldl(fun complete_song_info_other/2,
+					NumQuery, List#dbscroll{cnt=[]}}),
+	Prelim#dbscroll{cnt = lists:foldl(fun complete_song_info_other/2,
 					Prelim#dbscroll.cnt, InstancesToQuery)}.
 
 get_active_players(Ctx) ->
