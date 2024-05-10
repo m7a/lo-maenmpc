@@ -80,8 +80,12 @@ handle_call({ui_simple, volume_change, Delta}, _From, Ctx) ->
 	NewVal = Ctx#spl.mpd_volume + Delta,
 	{reply, case Ctx#spl.mpd_volume /= -1 andalso
 					 NewVal >= 0 andalso NewVal =< 100 of
-		true  -> maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle,
-				fun(Conn) -> erlmpd:setvol(Conn, NewVal) end);
+		true -> case maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle,
+				fun(Conn) -> erlmpd:setvol(Conn, NewVal) end) of
+			ok           -> ok;
+			{error, Err} -> gen_server:cast(Ctx#spl.db,
+					{mpd_assign_error, unknown, Err}), ok
+			end;
 		false -> ok
 	end, Ctx};
 handle_call({ui_simple, Action}, _From, Ctx) ->
@@ -119,7 +123,6 @@ handle_call({query_artists, QList, Filter}, _From, Ctx) ->
 	end), Ctx};
 handle_call({enqueue, Song}, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
-
 		ok = erlmpd:add(Conn, element(Ctx#spl.idx, Song#dbsong.uris))
 	end), Ctx};
 % TODO ALL OTHER INTERACTIVE FUNCTION STUFF GOES HERE...
@@ -144,6 +147,9 @@ update_playing_info(Name, Conn, Ctx) ->
 					query_rating(CurrentSong, Conn, Ctx)}
 			end).
 
+parse_metadata({error, Descr}, Ctx) ->
+	gen_server:cast(Ctx#spl.db, {mpd_assign_error, unknown, Descr}),
+	maenmpc_erlmpd:epsilon_song(Ctx#spl.len);
 parse_metadata(CurrentSong, Ctx) ->
 	case proplists:get_value(file, CurrentSong) of
 	undefined -> maenmpc_erlmpd:epsilon_song(Ctx#spl.len);
