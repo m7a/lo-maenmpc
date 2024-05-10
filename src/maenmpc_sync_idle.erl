@@ -73,6 +73,12 @@ handle_event({call, FromTX}, tx_begin, idle, Ctx = #syncidle{conn=Conn}) ->
 	% delay reply!
 	{next_state, tx_pre, Ctx#syncidle{tx=FromTX}, []};
 
+% TODO UNDER EVALUATION. IF IT DOES NOT WORK THEN CONSIDER MAKING INTERRUPT_NO_TX() WAIT UNTIL BACK TO IDLE STATE!
+handle_event({call, FromTX}, tx_begin, interrupted, Ctx) ->
+	% noidle already set upon interrupting, can rely on the idle to return
+	% within the next messages.
+	{next_state, tx_pre, Ctx#syncidle{tx=FromTX}, []};
+
 handle_event({call, FromTX}, {tx_end, NotifyCompletionTo}, tx_processing,
 								Ctx) ->
 	ok = gen_server:call(NotifyCompletionTo, mpd_idle_enter),
@@ -84,15 +90,15 @@ handle_event({call, From}, is_online, InState, Ctx) when
 handle_event({call, From}, is_online, _InState, Ctx) ->
 	{keep_state, Ctx, [{reply, From, true}]};
 
-% TODO z might it make sense to report some things as errors rather than catchall?
-%        or introduce a fault counter (also for ealrady errors!)?
-
 % catchall
-handle_event({call, From}, _OldState, _Event, Ctx) ->
+handle_event({call, From}, Event, OldState, Ctx) ->
+	% report unsolicited calls because they can hide race conditions...
+	error_logger:info_msg("maenmpc_sync_idle wrong state from=" ++
+		"~p oldstate=~p event=~p ctx=~p", [From, OldState, Event, Ctx]),
 	{keep_state, Ctx, [{reply, From, ok}]};
-handle_event(cast, _OldState, _Event, Ctx) ->
+handle_event(cast, _Event, _OldState, Ctx) ->
 	{keep_state, Ctx};
-handle_event({_Other, _From}, _OldState, _Event, Ctx) ->
+handle_event({_Other, _From}, _Event, _OldState, Ctx) ->
 	{keep_state, Ctx}.
 
 % -- end state machine --
