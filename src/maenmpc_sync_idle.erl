@@ -85,7 +85,7 @@ handle_event({call, FromTX}, {tx_end, NotifyCompletionTo}, tx_processing,
 	{next_state, idle, Ctx, [{reply, FromTX, ok}]};
 
 handle_event({call, From}, is_online, InState, Ctx) when
-				InState =:= init orelse InState =:= error ->
+				InState =:= init orelse InState =:= offline ->
 	{keep_state, Ctx, [{reply, From, false}]};
 handle_event({call, From}, is_online, _InState, Ctx) ->
 	{keep_state, Ctx, [{reply, From, true}]};

@@ -16,7 +16,7 @@ init([Parent, Name, Config]) ->
 		{ok, SO};
 	{error, Reason} ->
 		gen_server:cast(Parent, {mpd_assign_error, Name, Reason}),
-		{stop, ignore}
+		ignore
 	end.
 
 idle_enter(State={_Parent, _Name, Conn, S0}) ->
