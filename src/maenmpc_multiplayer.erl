@@ -282,20 +282,31 @@ list_replace(Ctx, List=#dbscroll{type=list, cnt=OldCnt,
 		qoffset = sum_artists(BeforeRev2),
 		user_data = {Artists, BeforeRev2, Remaining}
 	});
-list_replace(Ctx, List=#dbscroll{type=queue, csel=CSel, qoffset=QOffset0,
-					last_query_len=NReq}) ->
-	AOffset = CSel + QOffset0,
-	{QOffset1, NumQuery} = case AOffset =< 2 * NReq of
-		true  -> {0,                      AOffset + 3 * NReq};
-		false -> {AOffset - 2 * NReq - 1, 5 * NReq}
+list_replace(Ctx, List=#dbscroll{type=queue, coffset=COffset, csel=CSel,
+				qoffset=QOffset0, last_query_len=NReq}) ->
+	AOffset = max(0, CSel + QOffset0),
+	{QOffset1, NumQuery} = case AOffset < 2 * NReq of
+		true  -> {0,                  AOffset + 3 * NReq};
+		false -> {AOffset - 2 * NReq, 5 * NReq}
 	end,
-	% reset total to -1 to force update query number of items from DB!
-	NewQ = query_queue(Ctx, NumQuery, List#dbscroll{qoffset=QOffset1,
-								total=-1}),
-	MaxOffsetAvail = length(NewQ#dbscroll.cnt) - 1,
-	NewSel = max(0, min(MaxOffsetAvail, AOffset - NewQ#dbscroll.qoffset)),
-	NewDraw = max(0, min(MaxOffsetAvail - NReq + 1, NewSel - NReq + 1)), 
-	NewQ#dbscroll{coffset = NewDraw, csel = NewSel}.
+	% reset total to -1 to force update query number of items from DB
+	NewQ = query_queue(Ctx, NumQuery,
+				List#dbscroll{qoffset=QOffset1, total=-1}),
+	% selected item must be within the query result range
+	% (0 .. length(cnt) - 1) and is preferably the old index
+	% converted to new qoffset (old absolute offset - new q offst)
+	NewSel = max(0, min(length(NewQ#dbscroll.cnt) - 1,
+					AOffset - NewQ#dbscroll.qoffset)),
+	% we assert that COffset <= NewSel in order for the selected item to
+	% be within the visible range, hence NewSel marks the max permitted
+	% value and as a result the following part: max(0, min(NewSel(...
+	% Assume this limit is not reached then we can either try to display
+	% the selected item at the end of the screen (coffset=NewSel-NReq+1)
+	% or just at the old position (COffset + QOffset0 - QOffset1)
+	NewQ#dbscroll{coffset = max(0, min(NewSel, max(
+				NewSel - NReq + 1,
+				COffset + QOffset0 - NewQ#dbscroll.qoffset))),
+		      csel = NewSel}.
 
 query_queue(Ctx, NumQuery, List=#dbscroll{csel=PreSel}) ->
 	InstancesToQuery = lists:filtermap(fun({Name, _Idx}) ->
