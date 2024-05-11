@@ -26,8 +26,10 @@ init([NotifyToDB]) ->
 	cecho:noecho(),
 	cecho:keypad(?ceSTDSCR, true),
 	{Height, Width} = cecho:getmaxyx(),
-	{ok, init_windows(#view{height = Height, width = Width,
-		db = NotifyToDB, cidx = 1, page = help}, "Initializing...")}.
+	CtxStart = init_windows(#view{height = Height, width = Width,
+					db = NotifyToDB, cidx = 1, page = help},
+					"Initializing..."),
+	{ok, draw_page_help(CtxStart)}.
 
 init_color_pairs() ->
 	cecho:init_pair(?CPAIR_DEFAULT,     ?ceCOLOR_WHITE,  ?ceCOLOR_BLACK),
@@ -137,6 +139,80 @@ draw_sel_card_border(Ctx) ->
 	cecho:wborder(Ctx#view.wnd_sel_card, $ , $ , $-, $-, $-, $-, $-, $-),
 	accent(Ctx, Ctx#view.wnd_sel_card, off, std).
 
+draw_page_help(Ctx) ->
+	cecho:werase(Ctx#view.wnd_main),
+	cecho:mvwaddstr(Ctx#view.wnd_main, 1, 10, "Ma_Sys.ma Erlang NCurses " ++
+					"Music Player Client -- M A E N M P C"),
+	cecho:mvwaddstr(Ctx#view.wnd_main, 2, 2, "(c) 2024 Ma_Sys.ma " ++
+		"<info@masysma.net>. For documentation, consult README.md"),
+	Default = ?ceCOLOR_PAIR(?CPAIR_DEFAULT),
+	Accent = case Ctx#view.cidx of
+		1    -> ?ceCOLOR_PAIR(?CPAIR_ACCENT1);
+		2    -> ?ceCOLOR_PAIR(?CPAIR_ACCENT2);
+		_Any -> Default
+		end,
+	draw_static_columns(Ctx#view.wnd_main, 1, 4, [
+		[{10, "Navigate", Accent},
+		 {6,  "Play",     Accent}, {14, "", Default},
+		 {6,  "Toggle",   Accent}, {11, "", Default},
+		 {9,  "Other",    Accent}, {19, "", Default} ],
+		[<<"← h"/utf8>>,
+		 <<"↑ +"/utf8>>,      <<"Volume up"/utf8>>,
+		 <<"P"/utf8>>,        <<"play"/utf8>>,
+		 <<"d DEL"/utf8>>,    <<"queue:  Remove item"/utf8>>],
+		[<<"→ l"/utf8>>,
+		 <<"↓ -"/utf8>>,      <<"Volume down"/utf8>>,
+		 <<"r"/utf8>>,        <<"repeat"/utf8>>,
+		 <<"CTRL-K/J"/utf8>>, <<"queue:  Move item"/utf8>>],
+		[<<"PgUp"/utf8>>,
+		 <<"←- s"/utf8>>,     <<"stop"/utf8>>,
+		 <<"z"/utf8>>,        <<"random"/utf8>>,
+		 <<"*"/utf8>>,        <<"rating: up"/utf8>>],
+		[<<"PgDown"/utf8>>,
+		 <<"Enter"/utf8>>,    <<"play now"/utf8>>,
+		 <<"y"/utf8>>,        <<"single"/utf8>>,
+		 <<"#"/utf8>>,        <<"rating: down"/utf8>>],
+		[<<"Home gg"/utf8>>,
+		 <<"a"/utf8>>,        <<"add @end"/utf8>>,
+		 <<"C"/utf8>>,        <<"consume"/utf8>>,
+		 <<"R"/utf8>>,        <<"radio:  start/reset"/utf8>>],
+		[<<"End  G"/utf8>>,
+		 <<"A"/utf8>>,        <<"add @current"/utf8>>,
+		 <<"x"/utf8>>,        <<"crossfade"/utf8>>,
+		 <<"T"/utf8>>,        <<"radio:  stop radio"/utf8>>],
+		[<<"F1..F10"/utf8>>,
+		 <<">"/utf8>>,        <<"next"/utf8>>,
+		 <<"p"/utf8>>,        <<"podcasts"/utf8>>,
+		 [],                  []],
+		[[],
+		 <<"<"/utf8>>,        <<"prev"/utf8>>,
+		 <<"Space"/utf8>>,    <<"expand"/utf8>>,
+		 <<"/ ? n p"/utf8>>,  <<"search on screen"/utf8>>]
+	]),
+	cecho:wrefresh(Ctx#view.wnd_main),
+	Ctx.
+
+draw_static_columns(Window, X, Y, All=[Heading|_T]) ->
+	lists:foldl(fun({Width, Label, _Color}, CX) ->
+			Atts = ?ceCOLOR_PAIR(?CPAIR_DEFAULT) bor ?ceA_BOLD,
+			cecho:attron(Window, Atts),
+			cecho:mvwaddstr(Window, Y, CX, utf8pad(Width, Label)),
+			cecho:attroff(Window, Atts),
+			CX + Width
+		end, X, Heading),
+	draw_static_columns_inner(Window, X, Y + 1, All).
+
+draw_static_columns_inner(_Window, _X, Y, [_Heading|[]]) ->
+	Y;
+draw_static_columns_inner(Window, X, Y, [Heading|[Line|Rem]]) ->
+	lists:foldl(fun({{Width, _Label, Atts}, Content}, CX) ->
+			cecho:attron(Window, Atts),
+			cecho:mvwaddstr(Window, Y, CX, utf8pad(Width, Content)),
+			cecho:attroff(Window, Atts),
+			CX + Width
+		end, X, lists:zip(Heading, Line)),
+	draw_static_columns_inner(Window, X, Y + 1, [Heading|Rem]).
+
 handle_call(_Call, _From, Context) ->
 	{reply, ok, Context}.
 
@@ -162,7 +238,7 @@ handle_cast({getch, Character}, Ctx) ->
 		?ceKEY_F(6)   -> ui_request(Ctx#view{page=radio},
 					{ui_query, radio, main_height(Ctx)});
 		?ceKEY_F(7)   ->
-			% TODO HACK
+			% TODO HACK - NEED TO USE PROPER OUTPUT NAME, MAYBE SEND VIA MULTIPLAYER?
 			gen_server:cast(maenmpc_radio, {radio_start, m16}), Ctx;
 		?ceKEY_F(10)  -> init:stop(0), Ctx;
 		?ceKEY_RESIZE -> ui_resize(Ctx);
