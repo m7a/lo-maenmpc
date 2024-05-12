@@ -222,7 +222,7 @@ check_in_range(#dbscroll{cnt=Cnt, coffset=COffset, total=Total,
 		{in_range, ok}
 	end.
 
-% TODO SMALL PROBLEM: WHAT IF WE DONT HAVE ANY ENTRIES AT ALL IN THIS LIST. NEGATIVE OFFSETS WERE OBSERVED ETC. IT CRASHES!
+% TODO SMALL PROBLEM: WHAT IF WE DONT HAVE ANY ENTRIES AT ALL IN THIS LIST. NEGATIVE OFFSETS WERE OBSERVED ETC. IT CRASHES! / EVEN CRASHES OUTSIDE OF THAT / REALLY NEED TO ENFORCE THE LIMITS FOR TYPE RADIO!!!
 proc_range_result(Ctx, _AnyRangeResult, List=#dbscroll{type=radio,
 							user_data=Idx}) ->
 	transform_and_send_to_ui(Ctx, List, Idx),
@@ -256,7 +256,7 @@ proc_range_result(Ctx, RangeResult,
 list_replace(Ctx, List=#dbscroll{type=list, cnt=OldCnt,
 					csel=CSel, last_query_len=NReq}) ->
 	{ArtistBefore, PrefixLRev} =
-		case CSel >= 0 andalso CSel < length(OldCnt) of
+		case CSel > 0 andalso CSel < length(OldCnt) of
 		true  -> SelBefore = lists:nth(CSel, OldCnt),
 			 {element(1, SelBefore#dbsong.key),
 				lists:reverse(lists:sublist(OldCnt, CSel))};
@@ -277,12 +277,12 @@ list_replace(Ctx, List=#dbscroll{type=list, cnt=OldCnt,
 		end,
 	{BeforeRev2, Selected, Remaining, OIAB2} =
 		case assemble_artists(IncAfterArtists, NReq * 3, []) of
-		{S1a, R1, M} when M =< 0 ->
-			{BeforeRev1, S1a, R1, OIABefore};
-		{S1b, [], N} ->
-			{BR2, RR, ReqRem2} = assemble_artists(
+		{S1aR, R1, M} when M =< 0 ->
+			{BeforeRev1, lists:reverse(S1aR), R1, OIABefore};
+		{S1bR, [], N} ->
+			{B2, RR, ReqRem2} = assemble_artists(
 							BeforeRev1, N, []),
-			{RR, lists:reverse(BR2) ++ S1b, [],
+			{RR, B2 ++ lists:reverse(S1bR), [],
 							OIABefore + N - ReqRem2}
 		end,
 	NewCnt = query_list_artists_songs(Selected, Ctx),
@@ -391,8 +391,13 @@ divide_list_by_pred_r1(Predicate, [H|T], {PreAcc, PostAcc}) ->
 	false -> divide_list_by_pred_r1(Predicate, T, {[H|PreAcc], PostAcc})
 	end.
 
+% Result:
+% {Reversed list of selected artists,
+%  Remaining list of artists in natural order,
+%  Number of Elements pending to fulfil requested number of items
+%  (can be negative)}
 assemble_artists(Artists, NReq, Acc) when NReq =< 0 orelse Artists =:= [] ->
-	{lists:reverse(Acc), Artists, NReq};
+	{Acc, Artists, NReq};
 assemble_artists([Artist={_Name, Songs}|Others], NReq, Acc) ->
 	assemble_artists(Others, NReq - Songs, [Artist|Acc]).
 
@@ -467,13 +472,12 @@ query_playcount(Ctx, List=#dbscroll{cnt=Cnt, csel=CSel}) ->
 
 list_prepend(Ctx, List=#dbscroll{type=list, cnt=Cnt, coffset=COffset, csel=CSel,
 			user_data={Artists, BeforeRev, After}}, NumRequested) ->
-	{NewArtistsRev, BeforeRemRev, _ReqRem} =
+	{NewArtistsOrd, BeforeRemRev, _ReqRem} =
 			assemble_artists(BeforeRev, NumRequested * 2, []),
-	NewArtistsOrd = lists:reverse(NewArtistsRev),
-	Prepend       = query_list_artists_songs(NewArtistsOrd, Ctx),
-	NewOffset     = sum_artists(NewArtistsRev),
-	NewCnt        = Prepend ++ Cnt,
-	NumPrep       = length(Prepend),
+	Prepend   = query_list_artists_songs(NewArtistsOrd, Ctx),
+	NewOffset = sum_artists(BeforeRemRev),
+	NewCnt    = Prepend ++ Cnt,
+	NumPrep   = length(Prepend),
 	List#dbscroll{
 		cnt       = NewCnt,
 		coffset   = COffset + NumPrep,
@@ -490,10 +494,11 @@ list_prepend(Ctx, List=#dbscroll{type=queue, qoffset=QOffset0}, NumRequested) ->
 
 list_append(Ctx, List=#dbscroll{type=list, cnt=Cnt,
 			user_data={Artists, BeforeRev, After}}, NumRequested) ->
-	{NewArtists, AfterRem, _ReqRem} = assemble_artists(After,
+	{NewArtistsRev, AfterRem, _ReqRem} = assemble_artists(After,
 							NumRequested * 2, []),
 	update_total(List#dbscroll{
-		cnt       = Cnt ++ query_list_artists_songs(NewArtists, Ctx),
+		cnt       = Cnt ++ query_list_artists_songs(
+					lists:reverse(NewArtistsRev), Ctx),
 		user_data = {Artists, BeforeRev, AfterRem}
 	});
 list_append(Ctx, List=#dbscroll{type=queue, cnt=Cnt, qoffset=QOffset0},
@@ -502,9 +507,30 @@ list_append(Ctx, List=#dbscroll{type=queue, cnt=Cnt, qoffset=QOffset0},
 	NewQ = query_queue(Ctx, NumRequested, List#dbscroll{qoffset=QOffset2}),
 	NewQ#dbscroll{cnt=Cnt ++ NewQ#dbscroll.cnt, qoffset=QOffset0}.
 
-% TODO TOP/BOT DOESNT CURRENTLY WORK FOR LIST VIEW
-ui_scroll(Ctx, top, List=#dbscroll{qoffset=QOffset, csel=CSel}) ->
-	ui_scroll(Ctx, -QOffset-CSel, List);
+ui_scroll(Ctx, top, List) ->
+	proc_range_result(Ctx, case List#dbscroll.qoffset =:= 0 of
+		true  -> {in_range, ok};
+		false -> out_of_range
+	end, List#dbscroll{coffset=0, csel=0, qoffset=0});
+ui_scroll(Ctx, bottom, List=#dbscroll{type=list, last_query_len=ItemsRequested,
+				user_data={_A, _BR2, Remaining}})
+				when length(Remaining) > 0 ->
+	Artists = query_all_artists(Ctx),
+	{ASel, ABefRev, _NRem} = assemble_artists(lists:reverse(Artists),
+							ItemsRequested * 3, []),
+	NewCnt = query_list_artists_songs(ASel, Ctx),
+	HaveCnt = length(NewCnt),
+	QOffset = sum_artists(ABefRev),
+	NewList = query_playcount(Ctx, List#dbscroll{
+		cnt       = NewCnt,
+		coffset   = max(0, HaveCnt - ItemsRequested),
+		csel      = max(0, HaveCnt - 1),
+		qoffset   = QOffset,
+		total     = QOffset + HaveCnt,
+		user_data = {Artists, ABefRev, []}
+	}),
+	transform_and_send_to_ui(Ctx, NewList),
+	Ctx#mpl{current_list=NewList};
 ui_scroll(Ctx, bottom, List=#dbscroll{qoffset=QOffset, total=Total}) ->
 	ui_scroll(Ctx, Total - QOffset, List);
 ui_scroll(Ctx, Offset, List=#dbscroll{coffset=COffset, qoffset=QOffset,
@@ -515,6 +541,7 @@ ui_scroll(Ctx, Offset, List=#dbscroll{coffset=COffset, qoffset=QOffset,
 		true -> min(Total - QOffset - ItemsRequested, COffset + Offset);
 		false -> COffset
 		end,
+	error_logger:info_msg("ui scroll coffset=~w csel=~w -> coffset=~w csel=~w", [COffset, CSel, NewCOffset, NewCSel]),
 	ui_query(Ctx, List#dbscroll{csel=NewCSel, coffset=NewCOffset}).
 
 handle_info(interrupt_idle, Ctx) ->
