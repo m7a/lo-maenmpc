@@ -486,11 +486,17 @@ list_prepend(Ctx, List=#dbscroll{type=list, cnt=Cnt, coffset=COffset, csel=CSel,
 		qoffset   = NewOffset,
 		user_data = {Artists, BeforeRemRev, After}
 	};
-list_prepend(Ctx, List=#dbscroll{type=queue, qoffset=QOffset0}, NumRequested) ->
+list_prepend(Ctx, List=#dbscroll{type=queue, coffset=COffset0, csel=CSel0,
+					qoffset=QOffset0}, NumRequested) ->
 	NewL = query_queue(Ctx, NumRequested, List#dbscroll{
 					qoffset=QOffset0 - NumRequested}),
-	NewL#dbscroll{cnt = NewL#dbscroll.cnt ++
-					Ctx#mpl.current_queue#dbscroll.cnt}.
+	NumPrep = length(NewL#dbscroll.cnt),
+	NewL#dbscroll{
+		%qoffset = QOffset0 - NumPrep,
+		cnt = NewL#dbscroll.cnt ++ Ctx#mpl.current_queue#dbscroll.cnt,
+		coffset = COffset0 + NumPrep,
+		csel = CSel0 + NumPrep
+	}.
 
 list_append(Ctx, List=#dbscroll{type=list, cnt=Cnt,
 			user_data={Artists, BeforeRev, After}}, NumRequested) ->
@@ -531,17 +537,17 @@ ui_scroll(Ctx, bottom, List=#dbscroll{type=list, last_query_len=ItemsRequested,
 	}),
 	transform_and_send_to_ui(Ctx, NewList),
 	Ctx#mpl{current_list=NewList};
-ui_scroll(Ctx, bottom, List=#dbscroll{qoffset=QOffset, total=Total}) ->
-	ui_scroll(Ctx, Total - QOffset, List);
+ui_scroll(Ctx, bottom, List=#dbscroll{qoffset=QOffset, total=Total,
+								csel=CSel}) ->
+	ui_scroll(Ctx, Total - QOffset - CSel, List);
 ui_scroll(Ctx, Offset, List=#dbscroll{coffset=COffset, qoffset=QOffset,
 		csel=CSel, total=Total, last_query_len=ItemsRequested}) ->
-	NewCSel = min(Total - QOffset - 1, CSel + Offset),
+	NewCSel = min(Total - QOffset - 1, max(- QOffset, CSel + Offset)),
 	NewCOffset = case NewCSel < COffset orelse
 					NewCSel >= COffset + ItemsRequested of
 		true -> min(Total - QOffset - ItemsRequested, COffset + Offset);
 		false -> COffset
 		end,
-	error_logger:info_msg("ui scroll coffset=~w csel=~w -> coffset=~w csel=~w", [COffset, CSel, NewCOffset, NewCSel]),
 	ui_query(Ctx, List#dbscroll{csel=NewCSel, coffset=NewCOffset}).
 
 handle_info(interrupt_idle, Ctx) ->
