@@ -95,12 +95,15 @@ handle_call({ui_simple, Action}, _From, Ctx) ->
 handle_call({query_queue, ItemsRequested, CurrentQ}, _From, Ctx) ->
 	{NewQ, Ctx2} = maenmpc_sync_idle:run_transaction(
 						Ctx#spl.syncidle, fun(Conn) ->
-		Ctx1 = case Ctx#spl.mpd_plength =< 0 of
-			 true  -> update_status(erlmpd:status(Conn), Ctx);
-			 false -> Ctx
-			 end,
-		Q0A = max(0, min(CurrentQ#dbscroll.qoffset,
-					Ctx1#spl.mpd_plength - ItemsRequested)),
+		% We must only correct the qoffset in event that the playlist
+		% length has changed. Otherwise don't allow changing the qoffset
+		% as to not have list_append operations concatenate wrong lists!
+		{Ctx1, Q0A} = case Ctx#spl.mpd_plength =< 0 of
+			true -> Ctx1P = update_status(erlmpd:status(Conn), Ctx),
+				{Ctx1P, max(0, min(CurrentQ#dbscroll.qoffset,
+				Ctx1P#spl.mpd_plength - ItemsRequested))};
+			false -> {Ctx, CurrentQ#dbscroll.qoffset}
+			end,
 		Q1A = min(Q0A + ItemsRequested, Ctx1#spl.mpd_plength),
 		{CurrentQ#dbscroll{
 			cnt=[query_rating(parse_metadata(El, Ctx1), Conn, Ctx1)
@@ -208,7 +211,11 @@ ui_simple_tx(toggle_single, Conn, Ctx) ->
 ui_simple_tx(toggle_consume, Conn, Ctx) ->
 	erlmpd:consume(Conn, not Ctx#spl.mpd_consume);
 ui_simple_tx(toggle_xfade, Conn, Ctx) ->
-	erlmpd:crossfade(Conn, max(0, 5 - Ctx#spl.mpd_xfade)).
+	erlmpd:crossfade(Conn, max(0, 5 - Ctx#spl.mpd_xfade));
+ui_simple_tx(song_previous, Conn, _Ctx) ->
+	erlmpd:previous(Conn);
+ui_simple_tx(song_next, Conn, _Ctx) ->
+	erlmpd:next(Conn).
 
 handle_cast(Msg={mpd_assign_error, _MPDName, _Reason}, Ctx) ->
 	% bubble-up error

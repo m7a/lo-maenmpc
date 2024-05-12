@@ -16,7 +16,7 @@
 	height, width,
 	wnd_song, wnd_card, wnd_main, wnd_sel, wnd_sel_card, wnd_status,
 	wnd_keys,
-	db, cidx, page
+	db, cidx, page, storech
 }).
 
 init([NotifyToDB]) ->
@@ -26,10 +26,9 @@ init([NotifyToDB]) ->
 	cecho:noecho(),
 	cecho:keypad(?ceSTDSCR, true),
 	{Height, Width} = cecho:getmaxyx(),
-	CtxStart = init_windows(#view{height = Height, width = Width,
-					db = NotifyToDB, cidx = 1, page = help},
-					"Initializing..."),
-	{ok, draw_page_help(CtxStart)}.
+	{ok, init_windows(#view{height = Height, width = Width,
+			db = NotifyToDB, cidx = 1, page = help, storech = $_},
+			"Initializing...")}.
 
 init_color_pairs() ->
 	cecho:init_pair(?CPAIR_DEFAULT,     ?ceCOLOR_WHITE,  ?ceCOLOR_BLACK),
@@ -103,7 +102,10 @@ wnd_static_draw(Ctx) ->
 		{9, ""},       {0, "Quit"}
 	]),
 	cecho:wrefresh(Ctx#view.wnd_keys),
-	Ctx.
+	case Ctx#view.page =:= help of
+	true  -> draw_page_help(Ctx);
+	false -> Ctx
+	end.
 
 accent(Ctx, Wnd, OnOff, Sel) ->
 	Atts = case {Ctx#view.cidx, Sel} of
@@ -141,9 +143,10 @@ draw_sel_card_border(Ctx) ->
 
 draw_page_help(Ctx) ->
 	cecho:werase(Ctx#view.wnd_main),
-	cecho:mvwaddstr(Ctx#view.wnd_main, 1, 10, "Ma_Sys.ma Erlang NCurses " ++
-					"Music Player Client -- M A E N M P C"),
-	cecho:mvwaddstr(Ctx#view.wnd_main, 2, 2, "(c) 2024 Ma_Sys.ma " ++
+	X0 = max(0, (Ctx#view.width - 78) div 2),
+	cecho:mvwaddstr(Ctx#view.wnd_main, 1, X0 + 7, "Ma_Sys.ma Erlang " ++
+				"NCurses Music Player Client -- M A E N M P C"),
+	cecho:mvwaddstr(Ctx#view.wnd_main, 2, X0, "(c) 2024 Ma_Sys.ma " ++
 		"<info@masysma.net>. For documentation, consult README.md"),
 	Default = ?ceCOLOR_PAIR(?CPAIR_DEFAULT),
 	Accent = case Ctx#view.cidx of
@@ -151,17 +154,17 @@ draw_page_help(Ctx) ->
 		2    -> ?ceCOLOR_PAIR(?CPAIR_ACCENT2);
 		_Any -> Default
 		end,
-	draw_static_columns(Ctx#view.wnd_main, 1, 4, [
+	draw_static_columns(Ctx#view.wnd_main, X0, 4, [
 		[{10, "Navigate", Accent},
 		 {6,  "Play",     Accent}, {14, "", Default},
 		 {6,  "Toggle",   Accent}, {11, "", Default},
 		 {9,  "Other",    Accent}, {19, "", Default} ],
-		[<<"← h"/utf8>>,
-		 <<"↑ +"/utf8>>,      <<"Volume up"/utf8>>,
+		[<<"↑ k"/utf8>>,
+		 <<"→ +"/utf8>>,      <<"Volume up"/utf8>>,
 		 <<"P"/utf8>>,        <<"play"/utf8>>,
 		 <<"d DEL"/utf8>>,    <<"queue:  Remove item"/utf8>>],
-		[<<"→ l"/utf8>>,
-		 <<"↓ -"/utf8>>,      <<"Volume down"/utf8>>,
+		[<<"↓ j"/utf8>>,
+		 <<"← -"/utf8>>,      <<"Volume down"/utf8>>,
 		 <<"r"/utf8>>,        <<"repeat"/utf8>>,
 		 <<"CTRL-K/J"/utf8>>, <<"queue:  Move item"/utf8>>],
 		[<<"PgUp"/utf8>>,
@@ -217,32 +220,18 @@ handle_call(_Call, _From, Context) ->
 	{reply, ok, Context}.
 
 handle_cast({getch, Character}, Ctx) ->
-	{noreply, case Character of
-		?ceKEY_LEFT   -> ui_request(Ctx, {ui_simple, volume_change, -1});
-		?ceKEY_RIGHT  -> ui_request(Ctx, {ui_simple, volume_change, +1});
-		$s            -> ui_request(Ctx, {ui_simple, stop});
-		$P            -> ui_request(Ctx, {ui_simple, toggle_pause});
-		$r            -> ui_request(Ctx, {ui_simple, toggle_repeat});
-		$z            -> ui_request(Ctx, {ui_simple, toggle_random});
-		$y            -> ui_request(Ctx, {ui_simple, toggle_single});
-		$C            -> ui_request(Ctx, {ui_simple, toggle_consume});
-		$x            -> ui_request(Ctx, {ui_simple, toggle_xfade});
-		?ceKEY_UP     -> ui_scroll(Ctx, -1);
-		?ceKEY_DOWN   -> ui_scroll(Ctx, +1);
-		?ceKEY_PGDOWN -> ui_scroll(Ctx, +current_page_height(Ctx));
-		?ceKEY_PGUP   -> ui_scroll(Ctx, -current_page_height(Ctx));
-		?ceKEY_F(2)   -> ui_request(Ctx#view{page=queue},
-					{ui_query, queue, main_height(Ctx)-1});
-		?ceKEY_F(4)   -> ui_request(Ctx#view{page=list},
-					{ui_query, list,  main_height(Ctx)});
-		?ceKEY_F(6)   -> ui_request(Ctx#view{page=radio},
-					{ui_query, radio, main_height(Ctx)});
-		?ceKEY_F(7)   ->
-			% TODO HACK - NEED TO USE PROPER OUTPUT NAME, MAYBE SEND VIA MULTIPLAYER?
-			gen_server:cast(maenmpc_radio, {radio_start, m16}), Ctx;
-		?ceKEY_F(10)  -> init:stop(0), Ctx;
-		?ceKEY_RESIZE -> ui_resize(Ctx);
-		_Any          -> Ctx
+	{noreply, case Ctx#view.storech =:= $_ of
+		true ->
+			single_key(Ctx, Character);
+		false ->
+			Ctx2 = Ctx#view{storech=$_},
+			case {Ctx#view.storech, Character} of
+			% TODO ALL UP
+			{$g, $g} -> ui_scroll(Ctx2, top);
+			{$Z, $Q} -> init:stop(0), Ctx2;
+			{$Z, $Z} -> init:stop(0), Ctx2;
+			{_A, _B} -> Ctx2
+			end
 	end};
 handle_cast({db_cidx, CIDX}, Ctx) ->
 	{noreply, wnd_static_draw(Ctx#view{cidx=CIDX})};
@@ -258,6 +247,62 @@ handle_cast({db_results, L}, Ctx) when L#dbscroll.type =:= Ctx#view.page ->
 	{noreply, draw_results(Ctx, L)};
 handle_cast(_Cast, Ctx) ->
 	{noreply, Ctx}.
+
+single_key(Ctx, Character) ->
+	case Character of
+	$-               -> ui_request(Ctx, {ui_simple, volume_change, -1});
+	?ceKEY_LEFT      -> ui_request(Ctx, {ui_simple, volume_change, -1});
+	$+               -> ui_request(Ctx, {ui_simple, volume_change, +1});
+	?ceKEY_RIGHT     -> ui_request(Ctx, {ui_simple, volume_change, +1});
+	?ceKEY_BACKSPACE -> ui_request(Ctx, {ui_simple, stop});
+	$s               -> ui_request(Ctx, {ui_simple, stop});
+	$P               -> ui_request(Ctx, {ui_simple, toggle_pause});
+	$r               -> ui_request(Ctx, {ui_simple, toggle_repeat});
+	$z               -> ui_request(Ctx, {ui_simple, toggle_random});
+	$y               -> ui_request(Ctx, {ui_simple, toggle_single});
+	$C               -> ui_request(Ctx, {ui_simple, toggle_consume});
+	$x               -> ui_request(Ctx, {ui_simple, toggle_xfade});
+	$<               -> ui_request(Ctx, {ui_simple, song_previous});
+	$>               -> ui_request(Ctx, {ui_simple, song_next});
+	$R               -> ui_request(Ctx, ui_radio_start);
+	$T               -> ui_request(Ctx, ui_radio_stop);
+	$k               -> ui_scroll(Ctx, -1);
+	?ceKEY_UP        -> ui_scroll(Ctx, -1);
+	$j               -> ui_scroll(Ctx, +1);
+	?ceKEY_DOWN      -> ui_scroll(Ctx, +1);
+	?ceKEY_PGDOWN    -> ui_scroll(Ctx, +current_page_height(Ctx));
+	?ceKEY_PGUP      -> ui_scroll(Ctx, -current_page_height(Ctx));
+	?ceKEY_HOME      -> ui_scroll(Ctx, top);
+	$g               -> Ctx#view{storech=Character};
+	$Z               -> Ctx#view{storech=Character};
+	?ceKEY_END       -> ui_scroll(Ctx, bottom);
+	$G               -> ui_scroll(Ctx, bottom);
+	?ceKEY_F(1)      -> draw_page_help(Ctx#view{page=help});
+	?ceKEY_F(2)      -> ui_request(Ctx#view{page=queue},
+				{ui_query, queue, main_height(Ctx)-1});
+	?ceKEY_F(4)      -> ui_request(Ctx#view{page=list},
+				{ui_query, list,  main_height(Ctx)});
+	?ceKEY_F(6)      -> ui_request(Ctx#view{page=radio},
+				{ui_query, radio, main_height(Ctx)});
+	$q               -> init:stop(0), Ctx;
+	?ceKEY_F(10)     -> init:stop(0), Ctx;
+	?ceKEY_RESIZE    -> ui_resize(Ctx);
+	% TODO NEW KEYBINDINGS / REQUESTS
+	$\n              -> ui_request(Ctx, {ui_selected, play});
+	$a               -> ui_request(Ctx, {ui_selected, enqueue_end});
+	$A               -> ui_request(Ctx, {ui_selected, enqueue_current});
+	?ceKEY_DEL       -> ui_request(Ctx, {ui_selected, queue_delete});
+	$d               -> ui_request(Ctx, {ui_selected, queue_delete});
+	$*               -> ui_request(Ctx, {ui_selected, rating_up});
+	$#               -> ui_request(Ctx, {ui_selected, rating_down});
+	% TODO F5       - search screen
+	% TODO / ? n p  - search on screen
+	% TODO F8       - output selection
+	% TODO p        - podcasts
+	% TODO Space    - expand/contract
+	% TODO CTRL-K/J - move item in playlist
+	_Any             -> Ctx
+	end.
 
 ui_request(Ctx, Request) ->
 	gen_server:cast(Ctx#view.db, Request),
@@ -393,18 +438,15 @@ draw_results_begin(Ctx, #dbscroll{type=list}) ->
 draw_results_begin(Ctx, #dbscroll{type=radio}) ->
 	{max(1, Ctx#view.width - 3),  max(0, main_height(Ctx)), 0}.
 
-scroll_offset_height(DOffset, Total, MaxDraw) ->
-	SHeight = min(MaxDraw, MaxDraw * MaxDraw div max(1, Total)),
-	SOffsetRaw = max(0, DOffset * MaxDraw div max(1, Total)),
+scroll_offset_height(AOffset, Total, MaxDraw) ->
+	TRef       = max(1, Total),
+	SHeight    = min(MaxDraw, max(1, round(MaxDraw * MaxDraw / TRef))),
+	SOffsetRaw = max(0,       round(AOffset * (MaxDraw - SHeight) / TRef)),
 	if
-	DOffset /= 0 andalso SOffsetRaw == 0 ->
-		{SOffsetRaw + 1, SHeight};
-	SOffsetRaw + SHeight >= MaxDraw andalso Total - DOffset > MaxDraw ->
-		{MaxDraw - SHeight - 1, SHeight};
-	SOffsetRaw + SHeight >= MaxDraw ->
-		{MaxDraw - SHeight, SHeight};
-	true ->
-		{SOffsetRaw, SHeight}
+	AOffset /= 0 andalso SOffsetRaw == 0 -> {1,                SHeight};
+	Total - AOffset =< MaxDraw      -> {MaxDraw - SHeight,     SHeight};
+	SOffsetRaw >= MaxDraw - SHeight -> {MaxDraw - SHeight - 1, SHeight};
+	true                            -> {SOffsetRaw,            SHeight}
 	end.
 
 draw_result_line(Ctx, #dbscroll{type=queue, csel=CSel,
@@ -481,7 +523,7 @@ uris_to_cpair(S, IsSel) ->
 	end.
 
 draw_scroll(Ctx, SHeight, SOffset, Y) ->
-	case Y >= SOffset andalso Y =< (SOffset + SHeight) of
+	case Y >= SOffset andalso Y < (SOffset + SHeight) of
 	true  -> cecho:mvwaddstr(Ctx#view.wnd_main, Y, Ctx#view.width - 1, "#");
 	false -> ok
 	end.

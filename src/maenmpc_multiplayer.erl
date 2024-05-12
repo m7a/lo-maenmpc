@@ -93,6 +93,13 @@ handle_cast({ui_query, Action, ItemsRequested}, Ctx) ->
 handle_cast({ui_scroll, Action, Offset, ItemsRequested}, Ctx) ->
 	{noreply, ui_scroll(Ctx, Offset,
 			ui_items_requested(Ctx, Action, ItemsRequested))};
+handle_cast(ui_radio_start, Ctx) ->
+	ok = gen_server:cast(maenmpc_radio, {radio_start, Ctx#mpl.mpd_active}),
+	{noreply, Ctx};
+handle_cast(ui_radio_stop, Ctx) ->
+	ok = gen_server:cast(maenmpc_radio, {radio_stop, Ctx#mpl.mpd_active}),
+	{noreply, Ctx};
+% TODO IMPLEMENT UI SELECTED ENDPOINT HERE!
 handle_cast({mpd_assign_error, Name, Reason}, Ctx) ->
 	gen_server:cast(Ctx#mpl.ui, {db_error, {offline, Name, Reason}}),
 	{noreply, Ctx};
@@ -205,12 +212,17 @@ check_in_range(#dbscroll{cnt=Cnt, coffset=COffset, total=Total,
 					last_query_len=R, qoffset=QOffset}) ->
 	Len = length(Cnt),
 	if
-	COffset < 0 orelse Len - COffset < R -> out_of_range;
-	COffset =< R andalso QOffset /= 0 -> {in_range, query_before};
-	Len - COffset =< (2 * R) andalso Len < Total -> {in_range, query_after};
-	true -> {in_range, ok}
+	COffset < 0 orelse Len - COffset < R ->
+		out_of_range;
+	COffset =< R andalso QOffset /= 0 ->
+		{in_range, query_before};
+	Len - COffset =< (2 * R) andalso QOffset + Len < Total ->
+		{in_range, query_after};
+	true ->
+		{in_range, ok}
 	end.
 
+% TODO SMALL PROBLEM: WHAT IF WE DONT HAVE ANY ENTRIES AT ALL IN THIS LIST. NEGATIVE OFFSETS WERE OBSERVED ETC. IT CRASHES!
 proc_range_result(Ctx, _AnyRangeResult, List=#dbscroll{type=radio,
 							user_data=Idx}) ->
 	transform_and_send_to_ui(Ctx, List, Idx),
@@ -308,7 +320,7 @@ list_replace(Ctx, List=#dbscroll{type=queue, coffset=COffset, csel=CSel,
 				COffset + QOffset0 - NewQ#dbscroll.qoffset))),
 		      csel = NewSel}.
 
-query_queue(Ctx, NumQuery, List=#dbscroll{csel=PreSel}) ->
+query_queue(Ctx, NumQuery, List) ->
 	InstancesToQuery = lists:filtermap(fun({Name, _Idx}) ->
 			case Name /= Ctx#mpl.mpd_active andalso
 					call_singleplayer(Name, is_online) of
@@ -490,12 +502,17 @@ list_append(Ctx, List=#dbscroll{type=queue, cnt=Cnt, qoffset=QOffset0},
 	NewQ = query_queue(Ctx, NumRequested, List#dbscroll{qoffset=QOffset2}),
 	NewQ#dbscroll{cnt=Cnt ++ NewQ#dbscroll.cnt, qoffset=QOffset0}.
 
-ui_scroll(Ctx, Offset, List=#dbscroll{coffset=COffset,
+% TODO TOP/BOT DOESNT CURRENTLY WORK FOR LIST VIEW
+ui_scroll(Ctx, top, List=#dbscroll{qoffset=QOffset, csel=CSel}) ->
+	ui_scroll(Ctx, -QOffset-CSel, List);
+ui_scroll(Ctx, bottom, List=#dbscroll{qoffset=QOffset, total=Total}) ->
+	ui_scroll(Ctx, Total - QOffset, List);
+ui_scroll(Ctx, Offset, List=#dbscroll{coffset=COffset, qoffset=QOffset,
 		csel=CSel, total=Total, last_query_len=ItemsRequested}) ->
-	NewCSel = max(0, min(Total - 1, CSel + Offset)),
+	NewCSel = min(Total - QOffset - 1, CSel + Offset),
 	NewCOffset = case NewCSel < COffset orelse
 					NewCSel >= COffset + ItemsRequested of
-		true  -> max(0, min(Total - ItemsRequested, COffset + Offset));
+		true -> min(Total - QOffset - ItemsRequested, COffset + Offset);
 		false -> COffset
 		end,
 	ui_query(Ctx, List#dbscroll{csel=NewCSel, coffset=NewCOffset}).
