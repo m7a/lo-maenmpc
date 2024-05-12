@@ -226,7 +226,6 @@ handle_cast({getch, Character}, Ctx) ->
 		false ->
 			Ctx2 = Ctx#view{storech=$_},
 			case {Ctx#view.storech, Character} of
-			% TODO ALL UP
 			{$g, $g} -> ui_scroll(Ctx2, top);
 			{$Z, $Q} -> init:stop(0), Ctx2;
 			{$Z, $Z} -> init:stop(0), Ctx2;
@@ -288,13 +287,19 @@ single_key(Ctx, Character) ->
 	?ceKEY_F(10)     -> init:stop(0), Ctx;
 	?ceKEY_RESIZE    -> ui_resize(Ctx);
 	% TODO NEW KEYBINDINGS / REQUESTS
-	$\n              -> ui_request(Ctx, {ui_selected, play});
-	$a               -> ui_request(Ctx, {ui_selected, enqueue_end});
-	$A               -> ui_request(Ctx, {ui_selected, enqueue_current});
-	?ceKEY_DEL       -> ui_request(Ctx, {ui_selected, queue_delete});
-	$d               -> ui_request(Ctx, {ui_selected, queue_delete});
-	$*               -> ui_request(Ctx, {ui_selected, rating_up});
-	$#               -> ui_request(Ctx, {ui_selected, rating_down});
+	$\n              -> ui_request(Ctx, {ui_selected, Ctx#view.page, play});
+	$a               -> ui_request(Ctx, {ui_selected, Ctx#view.page,
+							enqueue_end});
+	$A               -> ui_request(Ctx, {ui_selected, Ctx#view.page,
+							enqueue_current});
+	?ceKEY_DEL       -> ui_request(Ctx, {ui_selected, Ctx#view.page,
+							queue_delete});
+	$d               -> ui_request(Ctx, {ui_selected, Ctx#view.page,
+							queue_delete});
+	$*               -> ui_request(Ctx, {ui_selected, Ctx#view.page,
+							rating_up});
+	$#               -> ui_request(Ctx, {ui_selected, Ctx#view.page,
+							rating_down});
 	% TODO F5       - search screen
 	% TODO / ? n p  - search on screen
 	% TODO F8       - output selection

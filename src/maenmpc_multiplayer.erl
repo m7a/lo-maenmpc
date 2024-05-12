@@ -99,7 +99,8 @@ handle_cast(ui_radio_start, Ctx) ->
 handle_cast(ui_radio_stop, Ctx) ->
 	ok = gen_server:cast(maenmpc_radio, {radio_stop, Ctx#mpl.mpd_active}),
 	{noreply, Ctx};
-% TODO IMPLEMENT UI SELECTED ENDPOINT HERE!
+handle_cast({ui_selected, Screen, Action}, Ctx) ->
+	{noreply, ui_selected_action(Screen, Action, Ctx)};
 handle_cast({mpd_assign_error, Name, Reason}, Ctx) ->
 	gen_server:cast(Ctx#mpl.ui, {db_error, {offline, Name, Reason}}),
 	{noreply, Ctx};
@@ -222,11 +223,14 @@ check_in_range(#dbscroll{cnt=Cnt, coffset=COffset, total=Total,
 		{in_range, ok}
 	end.
 
-% TODO SMALL PROBLEM: WHAT IF WE DONT HAVE ANY ENTRIES AT ALL IN THIS LIST. NEGATIVE OFFSETS WERE OBSERVED ETC. IT CRASHES! / EVEN CRASHES OUTSIDE OF THAT / REALLY NEED TO ENFORCE THE LIMITS FOR TYPE RADIO!!!
-proc_range_result(Ctx, _AnyRangeResult, List=#dbscroll{type=radio,
-							user_data=Idx}) ->
-	transform_and_send_to_ui(Ctx, List, Idx),
-	Ctx#mpl{current_radio=List};
+proc_range_result(Ctx, _AnyRangeResult, List=#dbscroll{type=radio, cnt=Cnt,
+					last_query_len=NReq, user_data=Idx,
+					csel=CSel, coffset=COffset}) ->
+	NewSel = max(0, min(CSel, length(Cnt) - 1)),
+	ListSafe = List#dbscroll{csel = NewSel,
+			coffset = max(0, max(NewSel - NReq + 1, COffset))},
+	transform_and_send_to_ui(Ctx, ListSafe, Idx),
+	Ctx#mpl{current_radio=ListSafe};
 proc_range_result(Ctx, RangeResult,
 			List=#dbscroll{last_query_len=ItemsRequested}) ->
 	List2 = case RangeResult of
@@ -549,6 +553,25 @@ ui_scroll(Ctx, Offset, List=#dbscroll{coffset=COffset, qoffset=QOffset,
 		false -> COffset
 		end,
 	ui_query(Ctx, List#dbscroll{csel=NewCSel, coffset=NewCOffset}).
+
+ui_selected_action(Page, _AnyAction, Ctx)
+				when Page =/= queue andalso Page =/= list ->
+	% no operation when not on a music playback page...
+	Ctx;
+%ui_selected_action(Page, enqueue_end, Ctx) ->
+% TODO N_IMPL - something like get_selected() then check if it is an album and if yes, expand to list of files otherwise expand to list with single file. if none expand to empty list, then begin transaction and inside foreach use erlmpd:add(Conn, URI) = ok to append to playlist...
+ui_selected_action(Page, Action, Ctx) ->
+	Ctx.
+
+% TODO MAYBE MAKES MORE SENSE TO RETURN A LIST OF URIS?
+%get_selected(Ctx=#mpl{current_list=#dbscroll{cnt=Cnt, csel=CSel}}, list) ->
+%	get_selected_value(Cnt, CSel);
+%get_selected(Ctx=#mpl{current_queue=#dbscroll{cnt=Cnt, csel=CSel}}, queue) ->
+%	get_selected_value(Cnt, CSel).
+%
+%get_selected(Cnt, Idx) when Idx >= 0 andalso length(Cnt) < CSel ->
+%	lists:nth(Idx + 1, Cnt);
+%get_selected(_Cnt, _Idx) -> none.
 
 handle_info(interrupt_idle, Ctx) ->
 	call_singleplayer(Ctx#mpl.mpd_active, request_update),
