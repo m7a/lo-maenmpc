@@ -4,15 +4,14 @@
 -include_lib("maenmpc_db.hrl").
 
 -record(mpl, {
-	ui, radio, alsa, mpd_list, mpd_active,
-	%mpd_ratings, % TODO UNUSED MAY NEED IT TO EDIT RATING!
+	ui, radio, alsa, mpd_list, mpd_active, mpd_ratings,
 	maloja,
 	current_song, current_queue, current_list, current_radio,
 	current_filter
 }).
 
 init([NotifyToUI, NotifyToRadio]) ->
-	%{ok, PrimaryRatings} = application:get_env(maenmpc, primary_ratings),
+	{ok, PrimaryRatings} = application:get_env(maenmpc, primary_ratings),
 	{ok, MPDList}        = application:get_env(maenmpc, mpd),
 	{ok, ALSAHWInfo}     = application:get_env(maenmpc, alsa),
 	{ok, Maloja}         = application:get_env(maenmpc, maloja),
@@ -29,7 +28,7 @@ init([NotifyToUI, NotifyToRadio]) ->
 		alsa           = ALSAHWInfo,
 		mpd_list       = MPDListIdx, % [{name, idx}]
 		mpd_active     = MPDFirst,
-		%mpd_ratings   = PrimaryRatings,
+		mpd_ratings    = PrimaryRatings,
 		maloja         = maenmpc_maloja:conn(Maloja),
 		current_song   = maenmpc_erlmpd:epsilon_song(length(MPDList)),
 		current_queue  = #dbscroll{type=queue, cnt=[], coffset=0,
@@ -572,10 +571,10 @@ ui_selected_action(Page, Action, Ctx) ->
 		{Artist, Album, Title} = Item#dbsong.key,
 		UseItems = case Page =:= list andalso Title =:= album of
 			true -> lists:filter(fun(#dbsong{key={AArtist,
-							AAlbum, _ATitle}}) ->
-					Artist =:= AArtist andalso
-					Album  =:= AAlbum  andalso
-					Title  =/= album
+							AAlbum, ATitle}}) ->
+					AArtist =:= Artist andalso
+					AAlbum  =:= Album  andalso
+					ATitle  =/= album
 				end, Cnt);
 			false -> [Item]
 			end,
@@ -600,10 +599,17 @@ ui_selected_action(Page, Action, Ctx) ->
 			ok = call_singleplayer(Ctx#mpl.mpd_active,
 						{queue_delete, UseItems}),
 			Ctx;
+		% TODO NEED TO UPDATE SONG FROM DB HERE!
 		rating_up when length(UseItems) =:= 1 ->
-			Ctx; % TODO RATING HERE
+			[UIF|_UIT] = UseItems,
+			ok = call_singleplayer(Ctx#mpl.mpd_ratings,
+						{rating, +1, UIF}),
+			Ctx;
 		rating_down when length(UseItems) =:= 1 ->
-			Ctx; % TODO RATING HERE
+			[UIF|_UIT] = UseItems,
+			ok = call_singleplayer(Ctx#mpl.mpd_ratings,
+						{rating, -1, UIF}),
+			Ctx;
 		_Other ->
 			error_logger:info_msg("-> ignored ~w", [Action]), % TODO FOR DEBUG
 			% ignore requests in wrong state etc.

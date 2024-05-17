@@ -132,13 +132,8 @@ handle_call({enqueue_end, Songs}, _From, Ctx) ->
 		end, Songs)
 	end), Ctx};
 handle_call({enqueue_current, Songs}, _From, Ctx) ->
-	% add "uri" position (= +0)
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
-		lists:foreach(fun({Song, Offset}) ->
-			erlmpd:addid(Conn, element(Ctx#spl.idx,
-							Song#dbsong.uris),
-						io_lib:format("+~w", [Offset]))
-		end, lists:zip(Songs, lists:seq(0, length(Songs) - 1)))
+		enqueue_after_current(Songs, Conn, Ctx)
 	end), Ctx};
 handle_call({queue_delete, Songs}, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
@@ -150,16 +145,29 @@ handle_call({play_from_playlist, [SelIt|_Others]}, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
 		ok = erlmpd:playid(Conn, SelIt#dbsong.playlist_id)
 	end), Ctx};
-% TODO CSTAT HOW DOES THIS ONE WORK ANYWAYS? NEED TO ADD AFTER AND GET LAST ID OR SOMETHING -> MAYBE FACTOR OUT FUNCTION FROM enqueue_current because it seems this is like very similar to that
-%handle_call({play, [H|TSongs]}, _From, Ctx) ->
-%	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
-%		erlmpd:play(C, 
-%		lists:foreach(fun({Song, Offset}) ->
-%			erlmpd:addid(Conn, element(Ctx#spl.idx,
-%							Song#dbsong.uris),
-%						io_lib:format("+~w", [Offset]))
-%		end, lists:zip(Songs, lists:seq(0, length(Songs) - 1)))
-%	end), Ctx};
+handle_call({play, Songs}, _From, Ctx) ->
+	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
+		% This behaviour is a little “unconventional” because
+		% ENTER is usually not really supposed to add after
+		% the currently playing song. However, with my typical
+		% usage it may even make more sense to do this way.
+		% It might make sense to document the rationale behind,
+		% this, though...
+		FirstID = enqueue_after_current(Songs, Conn, Ctx),
+		ok = erlmpd:playid(Conn, FirstID)
+	end), Ctx};
+handle_call({rating, Direction, Song}, _From, Ctx) when Ctx#spl.is_rating ->
+	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
+		URI  = binary_to_list(element(Ctx#spl.idx, Song#dbsong.uris)),
+		NewR = compute_and_transform_rating(Ctx, Direction,
+							Song#dbsong.rating),
+		if
+		NewR =:= -1 -> erlmpd:sticker_delete(Conn, "song", URI,
+								"rating");
+		true        -> ok = erlmpd:sticker_set(Conn, "song", URI,
+					"rating", integer_to_list(NewR))
+		end
+	end), Ctx};
 % TODO ALL OTHER INTERACTIVE FUNCTION STUFF GOES HERE...
 handle_call(_Call, _From, Ctx) ->
 	{reply, ok, Ctx}.
@@ -248,6 +256,26 @@ ui_simple_tx(song_previous, Conn, _Ctx) ->
 	erlmpd:previous(Conn);
 ui_simple_tx(song_next, Conn, _Ctx) ->
 	erlmpd:next(Conn).
+
+enqueue_after_current(Songs, Conn, Ctx) ->
+	lists:foldl(fun({Song, Offset}, Acc) ->
+			ID = erlmpd:addid_relative(Conn, element(Ctx#spl.idx,
+						Song#dbsong.uris), Offset),
+			case Acc of
+			-1   -> ID;
+			_Any -> Acc
+			end
+		end, -1, lists:zip(Songs, lists:seq(0, length(Songs) - 1))).
+
+compute_and_transform_rating(_Ctx, Direction, OldRating) ->
+	Delta = Direction * 20,
+	if
+	% TODO HARDCODED DEFAULT -> NEED TO MOVE OUT OF RADIO SECTION AND MAKE AVAILABLE THROUGH CTX
+	OldRating =:= -1 -> (60 + Delta) div 10;
+	% out of frange symbolizes “delete rating”
+	OldRating + Delta < 0 orelse OldRating + Delta > 100 -> -1;
+	true -> (OldRating + Delta) div 10
+	end.
 
 handle_cast(Msg={mpd_assign_error, _MPDName, _Reason}, Ctx) ->
 	% bubble-up error
