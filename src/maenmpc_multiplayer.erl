@@ -16,7 +16,7 @@ init([NotifyToUI, NotifyToRadio]) ->
 	{ok, MPDList}        = application:get_env(maenmpc, mpd),
 	{ok, ALSAHWInfo}     = application:get_env(maenmpc, alsa),
 	{ok, Maloja}         = application:get_env(maenmpc, maloja),
-	MPDFirst = m16, % TODO DEBUG ONLY
+	MPDFirst = local, % TODO DEBUG ONLY
 	%[MPDFirst|_Others] = MPDList,
 	timer:send_interval(5000, interrupt_idle),
 	MPDListIdx = [{Name, Idx} || {{Name, _ConnInfo}, Idx} <-
@@ -105,7 +105,7 @@ handle_cast({mpd_assign_error, Name, Reason}, Ctx) ->
 	gen_server:cast(Ctx#mpl.ui, {db_error, {offline, Name, Reason}}),
 	{noreply, Ctx};
 handle_cast({radio_enqueue, DBSong}, Ctx=#mpl{current_radio=Radio}) ->
-	call_singleplayer(Ctx#mpl.mpd_active, {enqueue, DBSong}),
+	call_singleplayer(Ctx#mpl.mpd_active, {enqueue_end, [DBSong]}),
 	NewRadio = Radio#dbscroll{user_data=DBSong#dbsong.playlist_id},
 	transform_and_send_to_ui(Ctx, NewRadio, NewRadio#dbscroll.user_data),
 	{noreply, Ctx#mpl{current_radio=NewRadio}};
@@ -200,11 +200,12 @@ query_alsa(ALSA) ->
 	end.
 
 ui_items_requested(Ctx, Action, ItemsRequested) ->
-	case Action of
-	queue -> Ctx#mpl.current_queue#dbscroll{last_query_len=ItemsRequested};
-	list  -> Ctx#mpl.current_list #dbscroll{last_query_len=ItemsRequested};
-	radio -> Ctx#mpl.current_radio#dbscroll{last_query_len=ItemsRequested}
-	end.
+	List = list_for_page(Ctx, Action),
+	List#dbscroll{last_query_len=ItemsRequested}.
+
+list_for_page(Ctx, queue) -> Ctx#mpl.current_queue;
+list_for_page(Ctx, list)  -> Ctx#mpl.current_list;
+list_for_page(Ctx, radio) -> Ctx#mpl.current_radio.
 
 ui_query(Ctx, List) ->
 	proc_range_result(Ctx, check_in_range(List), List).
@@ -558,20 +559,57 @@ ui_selected_action(Page, _AnyAction, Ctx)
 				when Page =/= queue andalso Page =/= list ->
 	% no operation when not on a music playback page...
 	Ctx;
-%ui_selected_action(Page, enqueue_end, Ctx) ->
-% TODO N_IMPL - something like get_selected() then check if it is an album and if yes, expand to list of files otherwise expand to list with single file. if none expand to empty list, then begin transaction and inside foreach use erlmpd:add(Conn, URI) = ok to append to playlist...
 ui_selected_action(Page, Action, Ctx) ->
-	Ctx.
-
-% TODO MAYBE MAKES MORE SENSE TO RETURN A LIST OF URIS?
-%get_selected(Ctx=#mpl{current_list=#dbscroll{cnt=Cnt, csel=CSel}}, list) ->
-%	get_selected_value(Cnt, CSel);
-%get_selected(Ctx=#mpl{current_queue=#dbscroll{cnt=Cnt, csel=CSel}}, queue) ->
-%	get_selected_value(Cnt, CSel).
-%
-%get_selected(Cnt, Idx) when Idx >= 0 andalso length(Cnt) < CSel ->
-%	lists:nth(Idx + 1, Cnt);
-%get_selected(_Cnt, _Idx) -> none.
+	List = list_for_page(Ctx, Page),
+	Cnt  = List#dbscroll.cnt,
+	CSel = List#dbscroll.csel,
+	case CSel < 0 orelse CSel >= length(Cnt) of
+	true ->
+		% cancel if out of bounds / not exists
+		Ctx;
+	false ->
+		Item = lists:nth(CSel + 1, Cnt),
+		{Artist, Album, Title} = Item#dbsong.key,
+		UseItems = case Page =:= list andalso Title =:= album of
+			true -> lists:filter(fun(#dbsong{key={AArtist,
+							AAlbum, _ATitle}}) ->
+					Artist =:= AArtist andalso
+					Album  =:= AAlbum  andalso
+					Title  =/= album
+				end, Cnt);
+			false -> [Item]
+			end,
+		case Action of
+		play when Page =:= queue ->
+			ok = call_singleplayer(Ctx#mpl.mpd_active,
+						{play_from_playlist, UseItems}),
+			Ctx;
+		play ->
+			ok = call_singleplayer(Ctx#mpl.mpd_active,
+						{play, UseItems}),
+			Ctx;
+		enqueue_end ->
+			ok = call_singleplayer(Ctx#mpl.mpd_active,
+						{enqueue_end, UseItems}),
+			Ctx;
+		enqueue_current ->
+			ok = call_singleplayer(Ctx#mpl.mpd_active,
+						{enqueue_current, UseItems}),
+			Ctx;
+		queue_delete when Page =:= queue ->
+			ok = call_singleplayer(Ctx#mpl.mpd_active,
+						{queue_delete, UseItems}),
+			Ctx;
+		rating_up when length(UseItems) =:= 1 ->
+			Ctx; % TODO RATING HERE
+		rating_down when length(UseItems) =:= 1 ->
+			Ctx; % TODO RATING HERE
+		_Other ->
+			error_logger:info_msg("-> ignored ~w", [Action]), % TODO FOR DEBUG
+			% ignore requests in wrong state etc.
+			Ctx
+		end
+	end.
 
 handle_info(interrupt_idle, Ctx) ->
 	call_singleplayer(Ctx#mpl.mpd_active, request_update),

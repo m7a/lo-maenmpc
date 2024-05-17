@@ -124,10 +124,42 @@ handle_call({query_artists, QList, Filter}, _From, Ctx) ->
 					[Filter, {tagop, artist, eq, Artist}]})]
 		|| Artist <- QList]
 	end), Ctx};
-handle_call({enqueue, Song}, _From, Ctx) ->
+handle_call({enqueue_end, Songs}, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
-		ok = erlmpd:add(Conn, element(Ctx#spl.idx, Song#dbsong.uris))
+		lists:foreach(fun(Song) ->
+			ok = erlmpd:add(Conn, element(Ctx#spl.idx,
+							Song#dbsong.uris))
+		end, Songs)
 	end), Ctx};
+handle_call({enqueue_current, Songs}, _From, Ctx) ->
+	% add "uri" position (= +0)
+	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
+		lists:foreach(fun({Song, Offset}) ->
+			erlmpd:addid(Conn, element(Ctx#spl.idx,
+							Song#dbsong.uris),
+						io_lib:format("+~w", [Offset]))
+		end, lists:zip(Songs, lists:seq(0, length(Songs) - 1)))
+	end), Ctx};
+handle_call({queue_delete, Songs}, _From, Ctx) ->
+	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
+		erlmpd:deleteids(Conn, [Song#dbsong.playlist_id ||
+								Song <- Songs])
+	end), Ctx};
+% TODO x when we were to support albums here, would have to go +1 or something
+handle_call({play_from_playlist, [SelIt|_Others]}, _From, Ctx) ->
+	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
+		ok = erlmpd:playid(Conn, SelIt#dbsong.playlist_id)
+	end), Ctx};
+% TODO CSTAT HOW DOES THIS ONE WORK ANYWAYS? NEED TO ADD AFTER AND GET LAST ID OR SOMETHING -> MAYBE FACTOR OUT FUNCTION FROM enqueue_current because it seems this is like very similar to that
+%handle_call({play, [H|TSongs]}, _From, Ctx) ->
+%	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
+%		erlmpd:play(C, 
+%		lists:foreach(fun({Song, Offset}) ->
+%			erlmpd:addid(Conn, element(Ctx#spl.idx,
+%							Song#dbsong.uris),
+%						io_lib:format("+~w", [Offset]))
+%		end, lists:zip(Songs, lists:seq(0, length(Songs) - 1)))
+%	end), Ctx};
 % TODO ALL OTHER INTERACTIVE FUNCTION STUFF GOES HERE...
 handle_call(_Call, _From, Ctx) ->
 	{reply, ok, Ctx}.
