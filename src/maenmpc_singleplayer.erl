@@ -143,7 +143,7 @@ handle_call({queue_delete, Songs}, _From, Ctx) ->
 % TODO x when we were to support albums here, would have to go +1 or something
 handle_call({play_from_playlist, [SelIt|_Others]}, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
-		ok = erlmpd:playid(Conn, SelIt#dbsong.playlist_id)
+		erlmpd:playid(Conn, SelIt#dbsong.playlist_id)
 	end), Ctx};
 handle_call({play, Songs}, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->

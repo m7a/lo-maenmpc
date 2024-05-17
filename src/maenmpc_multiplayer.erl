@@ -592,7 +592,7 @@ ui_selected_action(Page, Action, Ctx) ->
 						{enqueue_end, UseItems}),
 			Ctx;
 		enqueue_current ->
-			ok = call_singleplayer(Ctx#mpl.mpd_active,
+			call_singleplayer(Ctx#mpl.mpd_active,
 						{enqueue_current, UseItems}),
 			Ctx;
 		queue_delete when Page =:= queue ->
