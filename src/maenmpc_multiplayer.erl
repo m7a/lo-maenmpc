@@ -599,17 +599,20 @@ ui_selected_action(Page, Action, Ctx) ->
 			ok = call_singleplayer(Ctx#mpl.mpd_active,
 						{queue_delete, UseItems}),
 			Ctx;
-		% TODO NEED TO UPDATE SONG FROM DB HERE!
 		rating_up when length(UseItems) =:= 1 ->
 			[UIF|_UIT] = UseItems,
 			ok = call_singleplayer(Ctx#mpl.mpd_ratings,
 						{rating, +1, UIF}),
-			Ctx;
+			% TODO x there is of course a real potential for
+			%        optimization here: No need to query the entire
+			%        view again after only one known item changed!
+			%        Same for rating_down...
+			proc_range_result(Ctx, out_of_range, List);
 		rating_down when length(UseItems) =:= 1 ->
 			[UIF|_UIT] = UseItems,
 			ok = call_singleplayer(Ctx#mpl.mpd_ratings,
 						{rating, -1, UIF}),
-			Ctx;
+			proc_range_result(Ctx, out_of_range, List);
 		_Other ->
 			error_logger:info_msg("-> ignored ~w", [Action]), % TODO FOR DEBUG
 			% ignore requests in wrong state etc.
