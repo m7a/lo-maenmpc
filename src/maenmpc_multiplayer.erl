@@ -7,7 +7,7 @@
 	ui, radio, alsa, mpd_list, mpd_active, mpd_ratings,
 	maloja,
 	current_song, current_queue, current_list, current_radio,
-	current_filter
+	current_output, current_filter
 }).
 
 init([NotifyToUI, NotifyToRadio]) ->
@@ -15,7 +15,7 @@ init([NotifyToUI, NotifyToRadio]) ->
 	{ok, MPDList}        = application:get_env(maenmpc, mpd),
 	{ok, ALSAHWInfo}     = application:get_env(maenmpc, alsa),
 	{ok, Maloja}         = application:get_env(maenmpc, maloja),
-	MPDFirst = local, % TODO DEBUG ONLY
+	MPDFirst = m16, % TODO DEBUG ONLY
 	%[MPDFirst|_Others] = MPDList,
 	timer:send_interval(5000, interrupt_idle),
 	MPDListIdx = [{Name, Idx} || {{Name, _ConnInfo}, Idx} <-
@@ -38,6 +38,9 @@ init([NotifyToUI, NotifyToRadio]) ->
 					csel=0, total=-1, last_query_len=0,
 					qoffset=0, user_data={[], [], []}},
 		current_radio  = #dbscroll{type=radio, cnt=[], coffset=0,
+					csel=0, total=0, last_query_len=0,
+					qoffset=0, user_data=-1},
+		current_output = #dbscroll{type=output, cnt=[], coffset=0,
 					csel=0, total=0, last_query_len=0,
 					qoffset=0, user_data=-1},
 		current_filter = {lnot, {land, [{tagop, artist, eq, ""},
@@ -202,9 +205,10 @@ ui_items_requested(Ctx, Action, ItemsRequested) ->
 	List = list_for_page(Ctx, Action),
 	List#dbscroll{last_query_len=ItemsRequested}.
 
-list_for_page(Ctx, queue) -> Ctx#mpl.current_queue;
-list_for_page(Ctx, list)  -> Ctx#mpl.current_list;
-list_for_page(Ctx, radio) -> Ctx#mpl.current_radio.
+list_for_page(Ctx, queue)  -> Ctx#mpl.current_queue;
+list_for_page(Ctx, list)   -> Ctx#mpl.current_list;
+list_for_page(Ctx, radio)  -> Ctx#mpl.current_radio;
+list_for_page(Ctx, output) -> Ctx#mpl.current_output.
 
 ui_query(Ctx, List) ->
 	proc_range_result(Ctx, check_in_range(List), List).
@@ -322,7 +326,17 @@ list_replace(Ctx, List=#dbscroll{type=queue, coffset=COffset, csel=CSel,
 	NewQ#dbscroll{coffset = max(0, min(NewSel, max(
 				NewSel - NReq + 1,
 				COffset + QOffset0 - NewQ#dbscroll.qoffset))),
-		      csel = NewSel}.
+		      csel = NewSel};
+list_replace(Ctx, List=#dbscroll{type=output}) ->
+	AllOutputs = lists:flatten(lists:filtermap(fun({Name, _Idx}) ->
+			case call_singleplayer(Name, is_online) of
+			true  -> {true, call_singleplayer(Name, query_output)};
+			false -> false
+			end
+		end, List)),
+	% TODO DETERMINE ACTIVE OUTPUT AND MARK IT AS CURRENT IN USER DATA?
+	List#dbscroll{cnt = AllOutputs, total = length(AllOutputs),
+							csel = 0, qoffset = 0}.
 
 query_queue(Ctx, NumQuery, List) ->
 	InstancesToQuery = lists:filtermap(fun({Name, _Idx}) ->
@@ -451,7 +465,8 @@ sum_artists(Artists) ->
 
 query_playcount(Ctx, List) when Ctx#mpl.maloja =:= {none, none} orelse
 			length(List#dbscroll.cnt) < 0 orelse
-			length(List#dbscroll.cnt) < List#dbscroll.csel ->
+			length(List#dbscroll.cnt) < List#dbscroll.csel orelse
+			List#dbscroll.type =:= output ->
 	List;
 query_playcount(Ctx, List=#dbscroll{cnt=Cnt, csel=CSel}) ->
 	Prefix = lists:sublist(Cnt, 1, CSel),
@@ -500,7 +515,9 @@ list_prepend(Ctx, List=#dbscroll{type=queue, coffset=COffset0, csel=CSel0,
 		cnt = NewL#dbscroll.cnt ++ Ctx#mpl.current_queue#dbscroll.cnt,
 		coffset = COffset0 + NumPrep,
 		csel = CSel0 + NumPrep
-	}.
+	};
+list_prepend(_Ctx, List=#dbscroll{type=output}, _NumRequested) ->
+	List.
 
 list_append(Ctx, List=#dbscroll{type=list, cnt=Cnt,
 			user_data={Artists, BeforeRev, After}}, NumRequested) ->
@@ -515,7 +532,9 @@ list_append(Ctx, List=#dbscroll{type=queue, cnt=Cnt, qoffset=QOffset0},
 								NumRequested) ->
 	QOffset2 = QOffset0 + length(Cnt),
 	NewQ = query_queue(Ctx, NumRequested, List#dbscroll{qoffset=QOffset2}),
-	NewQ#dbscroll{cnt=Cnt ++ NewQ#dbscroll.cnt, qoffset=QOffset0}.
+	NewQ#dbscroll{cnt=Cnt ++ NewQ#dbscroll.cnt, qoffset=QOffset0};
+list_append(_Ctx, List=#dbscroll{type=output}, _NumRequested) ->
+	List.
 
 ui_scroll(Ctx, top, List) ->
 	proc_range_result(Ctx, case List#dbscroll.qoffset =:= 0 of
@@ -556,6 +575,7 @@ ui_scroll(Ctx, Offset, List=#dbscroll{coffset=COffset, qoffset=QOffset,
 
 ui_selected_action(Page, _AnyAction, Ctx)
 				when Page =/= queue andalso Page =/= list ->
+	% TODO SELECT OUTPUT / SELECT PARTITION ETC
 	% no operation when not on a music playback page...
 	Ctx;
 ui_selected_action(Page, Action, Ctx) ->

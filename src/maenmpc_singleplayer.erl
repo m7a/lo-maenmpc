@@ -124,6 +124,24 @@ handle_call({query_artists, QList, Filter}, _From, Ctx) ->
 					[Filter, {tagop, artist, eq, Artist}]})]
 		|| Artist <- QList]
 	end), Ctx};
+handle_call(query_output, _From, Ctx) ->
+	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
+		% TODO DO SOMETHING HERE AND RETURN A LIST!
+		% `listpartitions`
+		% `outputs` (as assigned to current partition?)
+		% > erlmpd:outputs(Conn). -> list of property lists. Retain ID!
+		%   [[{outputid,0},
+		%     {outputname,<<"SSL-S2">>},
+		%     {plugin,<<"alsa">>},
+		%     {outputenabled,true},
+		%     {attribute,<<"allowed_formats=">>},
+		%     {attribute,<<"dop=0">>}]]
+		% > erlmpd:command(Conn2, "listpartitions").
+		%   ["partition: default"]
+		% https://github.com/MusicPlayerDaemon/MPD/issues/1498
+		Outputs = erlmpd:outputs(Conn),
+		[]
+	end), Ctx};
 handle_call({enqueue_end, Songs}, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
 		lists:foreach(fun(Song) ->
