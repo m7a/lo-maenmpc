@@ -7,24 +7,25 @@
 	db, syncidle, idx, len, is_rating, current_song,
 	% keep track of MPD states as to allow toggle commands to be sent etc.
 	mpd_volume, mpd_state, mpd_plength, mpd_repeat, mpd_random, mpd_single,
-	mpd_consume, mpd_xfade
+	mpd_consume, mpd_xfade, mpd_partition
 }).
 
 init(Properties) ->
 	InitialState = #spl{
-		db          = proplists:get_value(db,       Properties),
-		syncidle    = proplists:get_value(syncidle, Properties),
-		idx         = proplists:get_value(idx,      Properties),
-		len         = proplists:get_value(len,      Properties),
-		is_rating   = proplists:get_value(rating,   Properties, false),
-		mpd_volume  = -1,
-		mpd_state   = undefined,
-		mpd_plength = -1,
-		mpd_repeat  = false,
-		mpd_random  = false,
-		mpd_single  = false,
-		mpd_consume = false,
-		mpd_xfade   = 0
+		db            = proplists:get_value(db,      Properties),
+		syncidle      = proplists:get_value(syncidle,Properties),
+		idx           = proplists:get_value(idx,     Properties),
+		len           = proplists:get_value(len,     Properties),
+		is_rating     = proplists:get_value(rating,  Properties, false),
+		mpd_volume    = -1,
+		mpd_state     = undefined,
+		mpd_plength   = -1,
+		mpd_repeat    = false,
+		mpd_random    = false,
+		mpd_single    = false,
+		mpd_consume   = false,
+		mpd_xfade     = 0,
+		mpd_partition = <<"default">>
 	},
 	{ok, InitialState#spl{current_song=maenmpc_erlmpd:epsilon_song(
 							InitialState#spl.len)}}.
@@ -126,21 +127,42 @@ handle_call({query_artists, QList, Filter}, _From, Ctx) ->
 	end), Ctx};
 handle_call(query_output, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
-		% TODO DO SOMETHING HERE AND RETURN A LIST!
-		% `listpartitions`
-		% `outputs` (as assigned to current partition?)
-		% > erlmpd:outputs(Conn). -> list of property lists. Retain ID!
-		%   [[{outputid,0},
-		%     {outputname,<<"SSL-S2">>},
-		%     {plugin,<<"alsa">>},
-		%     {outputenabled,true},
-		%     {attribute,<<"allowed_formats=">>},
-		%     {attribute,<<"dop=0">>}]]
-		% > erlmpd:command(Conn2, "listpartitions").
-		%   ["partition: default"]
-		% https://github.com/MusicPlayerDaemon/MPD/issues/1498
-		Outputs = erlmpd:outputs(Conn),
-		[]
+		% In order to query all outputs completely we temporarily switch
+		% partitions. This should not be an issue since the player is
+		% not going to do anything with the connection during the
+		% running transaction here!
+		Partitions = [proplists:get_value(partition, PL) ||
+					PL <- erlmpd:listpartitions(Conn)],
+		{Outputs, ActiveS} = lists:foldl(fun(Partition, StateIn) ->
+			ok = erlmpd:partition(Conn, Partition),
+			lists:foldl(fun(Out, {OList, ASet}) ->
+				OutputID = proplists:get_value(outputid, Out),
+				{[#dboutput{
+					player_idx     = Ctx#spl.idx,
+					partition_name = Partition,
+					output_id      = OutputID,
+					output_name    = proplists:get_value(
+							outputname, Out)
+				}|OList],
+				case proplists:get_value(outputenabled, Out) of
+					true -> sets:add_element({Ctx#spl.idx,
+						Partition, OutputID}, ASet);
+					false -> ASet
+				end}
+			end, StateIn, erlmpd:outputs(Conn))
+		end, {[], sets:new()}, Partitions),
+		ok = erlmpd:partition(Conn, Ctx#spl.mpd_partition),
+		CandidateAssigned = sets:filter(fun({_Idx, Partition, _Output})
+			-> Partition =:= Ctx#spl.mpd_partition end, ActiveS),
+		#dboutputs{
+			outputs    = Outputs,
+			partitions = Partitions,
+			active_set = ActiveS,
+			assigned   = case sets:to_list(CandidateAssigned) of
+					[LH|[]] -> LH; _Other -> none
+					end
+			% no claim on cursor possible
+		}
 	end), Ctx};
 handle_call({enqueue_end, Songs}, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->

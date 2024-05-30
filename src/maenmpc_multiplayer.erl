@@ -5,9 +5,8 @@
 
 -record(mpl, {
 	ui, radio, alsa, mpd_list, mpd_active, mpd_ratings,
-	maloja,
-	current_song, current_queue, current_list, current_radio,
-	current_output, current_filter
+	maloja, outputs,
+	current_song, current_queue, current_list, current_radio, current_filter
 }).
 
 init([NotifyToUI, NotifyToRadio]) ->
@@ -30,6 +29,7 @@ init([NotifyToUI, NotifyToRadio]) ->
 		mpd_active     = MPDFirst,
 		mpd_ratings    = PrimaryRatings,
 		maloja         = maenmpc_maloja:conn(Maloja),
+		outputs        = none,
 		current_song   = maenmpc_erlmpd:epsilon_song(length(MPDList)),
 		current_queue  = #dbscroll{type=queue, cnt=[], coffset=0,
 					csel=0, total=-1, qoffset=0,
@@ -38,9 +38,6 @@ init([NotifyToUI, NotifyToRadio]) ->
 					csel=0, total=-1, last_query_len=0,
 					qoffset=0, user_data={[], [], []}},
 		current_radio  = #dbscroll{type=radio, cnt=[], coffset=0,
-					csel=0, total=0, last_query_len=0,
-					qoffset=0, user_data=-1},
-		current_output = #dbscroll{type=output, cnt=[], coffset=0,
 					csel=0, total=0, last_query_len=0,
 					qoffset=0, user_data=-1},
 		current_filter = {lnot, {land, [{tagop, artist, eq, ""},
@@ -89,6 +86,8 @@ handle_cast(R={ui_simple, _A, _B}, Ctx) ->
 handle_cast(R={ui_simple, _A}, Ctx) ->
 	call_singleplayer(Ctx#mpl.mpd_active, R),
 	{noreply, Ctx};
+handle_cast({ui_query, output}, Ctx) ->
+	{noreply, ui_query_outputs(Ctx)};
 handle_cast({ui_query, Action, ItemsRequested}, Ctx) ->
 	{noreply, ui_query(Ctx,
 			ui_items_requested(Ctx, Action, ItemsRequested))};
@@ -207,8 +206,7 @@ ui_items_requested(Ctx, Action, ItemsRequested) ->
 
 list_for_page(Ctx, queue)  -> Ctx#mpl.current_queue;
 list_for_page(Ctx, list)   -> Ctx#mpl.current_list;
-list_for_page(Ctx, radio)  -> Ctx#mpl.current_radio;
-list_for_page(Ctx, output) -> Ctx#mpl.current_output.
+list_for_page(Ctx, radio)  -> Ctx#mpl.current_radio.
 
 ui_query(Ctx, List) ->
 	proc_range_result(Ctx, check_in_range(List), List).
@@ -326,17 +324,7 @@ list_replace(Ctx, List=#dbscroll{type=queue, coffset=COffset, csel=CSel,
 	NewQ#dbscroll{coffset = max(0, min(NewSel, max(
 				NewSel - NReq + 1,
 				COffset + QOffset0 - NewQ#dbscroll.qoffset))),
-		      csel = NewSel};
-list_replace(Ctx, List=#dbscroll{type=output}) ->
-	AllOutputs = lists:flatten(lists:filtermap(fun({Name, _Idx}) ->
-			case call_singleplayer(Name, is_online) of
-			true  -> {true, call_singleplayer(Name, query_output)};
-			false -> false
-			end
-		end, List)),
-	% TODO DETERMINE ACTIVE OUTPUT AND MARK IT AS CURRENT IN USER DATA?
-	List#dbscroll{cnt = AllOutputs, total = length(AllOutputs),
-							csel = 0, qoffset = 0}.
+		      csel = NewSel}.
 
 query_queue(Ctx, NumQuery, List) ->
 	InstancesToQuery = lists:filtermap(fun({Name, _Idx}) ->
@@ -465,8 +453,7 @@ sum_artists(Artists) ->
 
 query_playcount(Ctx, List) when Ctx#mpl.maloja =:= {none, none} orelse
 			length(List#dbscroll.cnt) < 0 orelse
-			length(List#dbscroll.cnt) < List#dbscroll.csel orelse
-			List#dbscroll.type =:= output ->
+			length(List#dbscroll.cnt) < List#dbscroll.csel ->
 	List;
 query_playcount(Ctx, List=#dbscroll{cnt=Cnt, csel=CSel}) ->
 	Prefix = lists:sublist(Cnt, 1, CSel),
@@ -515,9 +502,7 @@ list_prepend(Ctx, List=#dbscroll{type=queue, coffset=COffset0, csel=CSel0,
 		cnt = NewL#dbscroll.cnt ++ Ctx#mpl.current_queue#dbscroll.cnt,
 		coffset = COffset0 + NumPrep,
 		csel = CSel0 + NumPrep
-	};
-list_prepend(_Ctx, List=#dbscroll{type=output}, _NumRequested) ->
-	List.
+	}.
 
 list_append(Ctx, List=#dbscroll{type=list, cnt=Cnt,
 			user_data={Artists, BeforeRev, After}}, NumRequested) ->
@@ -532,9 +517,39 @@ list_append(Ctx, List=#dbscroll{type=queue, cnt=Cnt, qoffset=QOffset0},
 								NumRequested) ->
 	QOffset2 = QOffset0 + length(Cnt),
 	NewQ = query_queue(Ctx, NumRequested, List#dbscroll{qoffset=QOffset2}),
-	NewQ#dbscroll{cnt=Cnt ++ NewQ#dbscroll.cnt, qoffset=QOffset0};
-list_append(_Ctx, List=#dbscroll{type=output}, _NumRequested) ->
-	List.
+	NewQ#dbscroll{cnt=Cnt ++ NewQ#dbscroll.cnt, qoffset=QOffset0}.
+
+ui_query_outputs(Ctx) ->
+	OutputsRaw = lists:foldl(
+		fun({Name, _Idx}, DBOI) ->
+			case call_singleplayer(Name, is_online) of
+			true  -> merge_outputs(DBOI,
+					call_singleplayer(Name, query_output),
+					Name =:= Ctx#mpl.mpd_active);
+			false -> DBOI
+			end
+		end,
+		#dboutputs{outputs=[], partitions=[], active_set=sets:new(),
+								assigned=none},
+		Ctx#mpl.mpd_list
+	),
+	[[PF|_PIT]|_PT] = OutputsRaw#dboutputs.partitions,
+	[OF|_OT] = OutputsRaw#dboutputs.outputs,
+	% TODO z Optionally return cursor from before if valid...
+	Outputs = OutputsRaw#dboutputs{cursor={1, PF, OF#dboutput.output_id}},
+	gen_server:cast(Ctx#mpl.ui, {db_outputs, Outputs}),
+	Ctx#mpl{outputs=Outputs}.
+
+merge_outputs(DBOI = #dboutputs{outputs=IO, partitions=IP, active_set=AI,
+						assigned=ASI},
+			#dboutputs{outputs=SO, partitions=SP, active_set=AS,
+						assigned=ASGN}, IsActive) ->
+	DBOI#dboutputs{
+		outputs    = IO ++ SO,
+		partitions = IP ++ [SP],
+		active_set = sets:union(AI, AS),
+		assigned   = case IsActive of true -> ASGN; false -> ASI end
+	}.
 
 ui_scroll(Ctx, top, List) ->
 	proc_range_result(Ctx, case List#dbscroll.qoffset =:= 0 of

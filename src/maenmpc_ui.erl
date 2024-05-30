@@ -108,18 +108,18 @@ wnd_static_draw(Ctx) ->
 	end.
 
 accent(Ctx, Wnd, OnOff, Sel) ->
-	Atts = case {Ctx#view.cidx, Sel} of
-		{1,  std} -> ?ceCOLOR_PAIR(?CPAIR_ACCENT1);
-		{1,  sel} -> ?ceCOLOR_PAIR(?CPAIR_ACCENT1_SEL);
-		{2,  std} -> ?ceCOLOR_PAIR(?CPAIR_ACCENT2);
-		{2,  sel} -> ?ceCOLOR_PAIR(?CPAIR_ACCENT2_SEL);
-		{_X, std} -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT);
-		{_Y, sel} -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT_SEL)
-		end,
+	Atts = idx_sel_to_cpair({Ctx#view.cidx, Sel}),
 	case OnOff of
 	on  -> cecho:attron(Wnd,  Atts);
 	off -> cecho:attroff(Wnd, Atts)
 	end.
+
+idx_sel_to_cpair({1,  std}) -> ?ceCOLOR_PAIR(?CPAIR_ACCENT1);
+idx_sel_to_cpair({1,  sel}) -> ?ceCOLOR_PAIR(?CPAIR_ACCENT1_SEL);
+idx_sel_to_cpair({2,  std}) -> ?ceCOLOR_PAIR(?CPAIR_ACCENT2);
+idx_sel_to_cpair({2,  sel}) -> ?ceCOLOR_PAIR(?CPAIR_ACCENT2_SEL);
+idx_sel_to_cpair({_X, std}) -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT);
+idx_sel_to_cpair({_Y, sel}) -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT_SEL).
 
 draw_card_border(Ctx) ->
 	accent(Ctx, Ctx#view.wnd_card, on, std),
@@ -244,6 +244,8 @@ handle_cast({db_playing, SongAndStatus}, Ctx) ->
 	end};
 handle_cast({db_results, L}, Ctx) when L#dbscroll.type =:= Ctx#view.page ->
 	{noreply, draw_results(Ctx, L)};
+handle_cast({db_outputs, Outputs}, Ctx) when Ctx#view.page =:= output ->
+	{noreply, draw_outputs(Ctx, Outputs)};
 handle_cast(_Cast, Ctx) ->
 	{noreply, Ctx}.
 
@@ -283,6 +285,8 @@ single_key(Ctx, Character) ->
 				{ui_query, list,  main_height(Ctx)});
 	?ceKEY_F(6)      -> ui_request(Ctx#view{page=radio},
 				{ui_query, radio, main_height(Ctx)});
+	?ceKEY_F(8)      -> ui_request(Ctx#view{page=output},
+				{ui_query, output});
 	$q               -> init:stop(0), Ctx;
 	?ceKEY_F(10)     -> init:stop(0), Ctx;
 	?ceKEY_RESIZE    -> ui_resize(Ctx);
@@ -460,8 +464,7 @@ draw_result_line(Ctx, #dbscroll{type=queue, csel=CSel,
 	IsCurrent = S#dbsong.playlist_id =:= CurrentSongID andalso
 							CurrentSongID /= -1,
 	IsSel = Y - 1 =:= CSel,
-	Atts = uris_to_cpair(S, IsSel) bor
-		case IsCurrent of true -> ?ceA_BOLD; false -> 0 end,
+	Atts = uris_to_cpair(S, IsSel) bor bold_if(IsCurrent),
 	cecho:attron(Ctx#view.wnd_main, Atts),
 	cecho:mvwaddstr(Ctx#view.wnd_main, Y, 0,
 		io_lib:format("~c ~s  ~s  ~s  ~2..0w:~2..0w",
@@ -503,10 +506,7 @@ draw_result_line(Ctx, #dbscroll{type=radio, csel=CSel,
 	Atts = case IsSel of
 		true  -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT_SEL);
 		false -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT)
-		end bor case IsCurrent of
-		true  -> ?ceA_BOLD;
-		false -> 0
-		end,
+		end bor bold_if(IsCurrent),
 	cecho:attron(Ctx#view.wnd_main, Atts),
 	cecho:mvwaddstr(Ctx#view.wnd_main, Y, 0, utf8pad(WT, Line)),
 	cecho:attroff(Ctx#view.wnd_main, Atts),
@@ -514,6 +514,9 @@ draw_result_line(Ctx, #dbscroll{type=radio, csel=CSel,
 	% [would be interesting wrt. viewing full info for truncated messages]
 	% TODO x FACTOR OUT SPECIAL RADIO MODE EVEN?
 	false.
+
+bold_if(true)  -> ?ceA_BOLD;
+bold_if(false) -> 0.
 
 uris_to_cpair(S, IsSel) ->
 	case S#dbsong.uris of
@@ -561,6 +564,79 @@ current_page_height(Ctx) ->
 	queue  -> main_height(Ctx) - 1;
 	_Other -> main_height(Ctx)
 	end.
+
+draw_outputs(Ctx, #dboutputs{outputs=Outputs, partitions=Partitions,
+				active_set=ActiveSet,
+				assigned={APlayerIdx, APartition, AOutputID},
+				cursor={CPlayerIdx, CPartition, COutputID}}) ->
+	cecho:werase(Ctx#view.wnd_main),
+	WPart = 15,
+	AttsD = ?ceCOLOR_PAIR(?CPAIR_DEFAULT),
+	cecho:attron(Ctx#view.wnd_main, AttsD),
+	cecho:mvwaddstr(Ctx#view.wnd_main, 0, 2, "Outputs"),
+	cecho:mvwaddstr(Ctx#view.wnd_main, 1, 2, lists:duplicate(WPart-2, $-)),
+	cecho:attroff(Ctx#view.wnd_main, AttsD),
+	PartitionsByPlayer = [length(P) || P <- Partitions],
+	% TODO x Names of players should be drawn here (rather than Player 1...)
+	% draw players
+	PartIdx = lists:seq(1, length(Partitions)),
+	Widths = lists:reverse(lists:foldl(fun({Idx, PWP}, CWO = [CW|_Rem]) ->
+		Atts0 = idx_sel_to_cpair({Idx, std}),
+		Atts  = Atts0 bor bold_if(Idx =:= APlayerIdx),
+		cecho:attron(Ctx#view.wnd_main, Atts),
+		cecho:mvwaddstr(Ctx#view.wnd_main, 0, CW,
+					io_lib:format("Player ~w", [Idx])),
+		cecho:attroff(Ctx#view.wnd_main, Atts),
+		cecho:attron(Ctx#view.wnd_main, Atts0),
+		cecho:mvwaddstr(Ctx#view.wnd_main, 1, CW,
+					lists:duplicate(PWP * WPart - 2, $-)),
+		cecho:attroff(Ctx#view.wnd_main, Atts0),
+		[CW + PWP * WPart|CWO]
+	end, [2 + WPart], lists:zip(PartIdx, PartitionsByPlayer))),
+	% draw partitions
+	lists:foldl(fun({Idx, PPartitions}, CWI) ->
+		lists:foldl(fun(Partition, CW) ->
+			Atts = idx_sel_to_cpair({Idx, std}) bor
+					bold_if(Idx =:= APlayerIdx andalso
+						Partition =:= APartition),
+			cecho:attron(Ctx#view.wnd_main, Atts),
+			cecho:mvwaddstr(Ctx#view.wnd_main, 2, CW,
+					utf8pad(WPart - 2, Partition)),
+			cecho:attroff(Ctx#view.wnd_main, Atts),
+			CW + WPart
+		end, CWI, PPartitions)
+	end, 2 + WPart, lists:zip(PartIdx, Partitions)),
+	% draw output lines
+	lists:foreach(fun({DY, #dboutput{player_idx=Player,
+					partition_name=Partition, output_id=ID,
+					output_name=Name}}) ->
+		Atts0 = idx_sel_to_cpair({Player, std}),
+		Atts  = Atts0 bor bold_if(Player =:= APlayerIdx andalso
+			Partition =:= APartition andalso ID =:= AOutputID),
+		cecho:attron(Ctx#view.wnd_main, Atts),
+		cecho:mvwaddstr(Ctx#view.wnd_main, DY + 2, 2, utf8pad(WPart - 2,
+									Name)),
+		cecho:attroff(Ctx#view.wnd_main, Atts),
+		lists:foldl(fun(PartitionDraw, CW) ->
+			AttsU = case Player =:= CPlayerIdx andalso
+					PartitionDraw =:= CPartition andalso
+					ID =:= COutputID of
+				true  -> idx_sel_to_cpair({Player, sel});
+				false -> Atts0
+				end bor bold_if(Player =:= APlayerIdx
+					andalso PartitionDraw =:= APartition
+					andalso ID =:= AOutputID),
+			cecho:attron(Ctx#view.wnd_main, AttsU),
+			Symbol = case sets:is_element({Player, PartitionDraw,
+				ID}, ActiveSet) of true -> $x; false -> $o end,
+			cecho:mvwaddstr(Ctx#view.wnd_main,
+							DY + 2, CW, [Symbol]),
+			cecho:attroff(Ctx#view.wnd_main, AttsU),
+			CW + WPart
+		end, lists:nth(Player, Widths), lists:nth(Player, Partitions))
+	end, lists:zip(lists:seq(1, length(Outputs)), Outputs)),
+	cecho:wrefresh(Ctx#view.wnd_main),
+	Ctx.
 
 ui_scroll(Ctx=#view{page=PG}, Offset) ->
 	case (PG =:= queue orelse PG =:= list orelse PG =:= radio) of
