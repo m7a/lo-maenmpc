@@ -14,8 +14,7 @@ init([NotifyToUI, NotifyToRadio]) ->
 	{ok, MPDList}        = application:get_env(maenmpc, mpd),
 	{ok, ALSAHWInfo}     = application:get_env(maenmpc, alsa),
 	{ok, Maloja}         = application:get_env(maenmpc, maloja),
-	MPDFirst = m16, % TODO DEBUG ONLY
-	%[MPDFirst|_Others] = MPDList,
+	[MPDFirst|_Others] = MPDList,
 	timer:send_interval(5000, interrupt_idle),
 	MPDListIdx = [{Name, Idx} || {{Name, _ConnInfo}, Idx} <-
 			lists:zip(MPDList, lists:seq(1, length(MPDList)))],
@@ -592,20 +591,17 @@ ui_scroll(Ctx, Offset, List=#dbscroll{coffset=COffset, qoffset=QOffset,
 	ui_query(Ctx, List#dbscroll{csel=NewCSel, coffset=NewCOffset}).
 
 ui_selected_action(output, play, Ctx) ->
-	% say player changes then have to switch player and then after the
-	%   switch apply the given output/partition selection.
-	% say partition changes then have to switch partition and then import
-	%   the selected output into the partition (ignore outcome) and assume
-	%   its ok then
-	% say output changes then have to switch output only
 	CtxPre = apply_player_change(Ctx),
-	% TODO SHOULD PROBABLY RETURN UPDATED OUTPUT INFO / RE-QUERY?
-	% sets:is_element of active interesting for singleplayer?
 	Cursor = CtxPre#mpl.outputs#dboutputs.cursor,
-	call_singleplayer(CtxPre#mpl.mpd_active, {set_output, Cursor}),
-	NewOutputs = CtxPre#mpl.outputs#dboutputs{active_set=Cursor},
-	gen_server:cast(CtxPre#mpl.ui, {db_outputs, NewOutputs}),
-	CtxPre#mpl{outputs=NewOutputs};
+	[OutputObj] = lists:filter(fun(#dboutput{player_idx=PIDX,
+				partition_name=PName, output_id=POID}) ->
+			PIDX  =:= element(1, Cursor) andalso
+			PName =:= element(2, Cursor) andalso
+			POID  =:= element(3, Cursor)
+		end, CtxPre#mpl.outputs#dboutputs.outputs),
+	ok = call_singleplayer(CtxPre#mpl.mpd_active, {set_output, OutputObj}),
+	ui_query_outputs(CtxPre#mpl{outputs=Ctx#mpl.outputs#dboutputs{
+							active_set=Cursor}});
 ui_selected_action(Page, _AnyAction, Ctx)
 				when Page =/= queue andalso Page =/= list ->
 	% no operation when not on a music playback page...
@@ -681,7 +677,7 @@ apply_player_change(Ctx = #mpl{mpd_list=MPDList, outputs=OutputsIn}) ->
 	NewIdx = element(1, OutputsIn#dboutputs.cursor),
 	% OK we change output for real!
 	ok = gen_server:cast(Ctx#mpl.ui, {db_cidx, NewIdx}),
-	{_Idx, Name} = lists:nth(NewIdx, MPDList),
+	{Name, _Idx} = lists:nth(NewIdx, MPDList),
 	Ctx#mpl{mpd_active = Name}.
 
 ui_horizontal_nav(output, Delta, Ctx = #mpl{outputs=OutputCTX}) ->
