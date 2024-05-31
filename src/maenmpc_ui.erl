@@ -96,10 +96,10 @@ wnd_static_draw(Ctx) ->
 		cecho:waddstr(Ctx#view.wnd_keys, io_lib:format("~-6s", [Msg])),
 		cecho:attroff(Ctx#view.wnd_keys, Atts)
 	end, [
-		% Planned assignments: {3, "Tree"}, {7, "Info"}
-		{1, "Help"},   {2, "Queue"}, {3, ""}, {4, "List"},
-		{5, "Search"}, {6, "Radio"}, {7, ""}, {8, "Output"},
-		{9, ""},       {0, "Quit"}
+		% Planned assignments: {3, "Tree"}, {5, "Search"}, {7, "Info"}
+		{1, "Help"}, {2, "Queue"}, {3, ""}, {4, "List"},
+		{5, ""},     {6, "Radio"}, {7, ""}, {8, "Output"},
+		{9, ""},     {0, "Quit"}
 	]),
 	cecho:wrefresh(Ctx#view.wnd_keys),
 	case Ctx#view.page =:= help of
@@ -159,11 +159,11 @@ draw_page_help(Ctx) ->
 		 {6,  "Play",     Accent}, {14, "", Default},
 		 {6,  "Toggle",   Accent}, {11, "", Default},
 		 {9,  "Other",    Accent}, {19, "", Default} ],
-		[<<"↑ k"/utf8>>,
+		[<<"↑ k  h"/utf8>>,
 		 <<"→ +"/utf8>>,      <<"Volume up"/utf8>>,
 		 <<"P"/utf8>>,        <<"play"/utf8>>,
 		 <<"d DEL"/utf8>>,    <<"queue:  Remove item"/utf8>>],
-		[<<"↓ j"/utf8>>,
+		[<<"↓ j  l"/utf8>>,
 		 <<"← -"/utf8>>,      <<"Volume down"/utf8>>,
 		 <<"r"/utf8>>,        <<"repeat"/utf8>>,
 		 <<"CTRL-K/J"/utf8>>, <<"queue:  Move item"/utf8>>],
@@ -183,11 +183,11 @@ draw_page_help(Ctx) ->
 		 <<"A"/utf8>>,        <<"add @current"/utf8>>,
 		 <<"x"/utf8>>,        <<"crossfade"/utf8>>,
 		 <<"T"/utf8>>,        <<"radio:  stop radio"/utf8>>],
-		[<<"F1..F10"/utf8>>,
+		[<<"Tab"/utf8>>,
 		 <<">"/utf8>>,        <<"next"/utf8>>,
 		 <<"p"/utf8>>,        <<"podcasts"/utf8>>,
 		 [],                  []],
-		[[],
+		[<<"F1..F10"/utf8>>,
 		 <<"<"/utf8>>,        <<"prev"/utf8>>,
 		 <<"Space"/utf8>>,    <<"expand"/utf8>>,
 		 <<"/ ? n p"/utf8>>,  <<"search on screen"/utf8>>]

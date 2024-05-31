@@ -14,9 +14,9 @@ init([NotifyToUI, NotifyToRadio]) ->
 	{ok, MPDList}        = application:get_env(maenmpc, mpd),
 	{ok, ALSAHWInfo}     = application:get_env(maenmpc, alsa),
 	{ok, Maloja}         = application:get_env(maenmpc, maloja),
-	[MPDFirst|_Others] = MPDList,
+	[{MPDFirst, _ConnInfo}|_Others] = MPDList,
 	timer:send_interval(5000, interrupt_idle),
-	MPDListIdx = [{Name, Idx} || {{Name, _ConnInfo}, Idx} <-
+	MPDListIdx = [{Name, Idx} || {{Name, _ConnInfoI}, Idx} <-
 			lists:zip(MPDList, lists:seq(1, length(MPDList)))],
 	gen_server:cast(NotifyToUI, {db_cidx,
 				proplists:get_value(MPDFirst, MPDListIdx)}),
@@ -590,7 +590,7 @@ ui_scroll(Ctx, Offset, List=#dbscroll{coffset=COffset, qoffset=QOffset,
 		end,
 	ui_query(Ctx, List#dbscroll{csel=NewCSel, coffset=NewCOffset}).
 
-ui_selected_action(output, play, Ctx) ->
+ui_selected_action(output, play, Ctx) when Ctx#mpl.outputs =/= none ->
 	CtxPre = apply_player_change(Ctx),
 	Cursor = CtxPre#mpl.outputs#dboutputs.cursor,
 	[OutputObj] = lists:filter(fun(#dboutput{player_idx=PIDX,
