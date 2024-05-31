@@ -1,0 +1,6 @@
+#!/bin/sh -eu
+# Wrapper for MAENMPC, (c) 2024 Ma_Sys.ma <info@masysma.net>
+# Remove LINES/COLUMNS from environment for resize to work!
+unset -v LINES
+unset -v COLUMNS
+exec /usr/share/mdvl-maenmpc/maenmpc/bin/maenmpc foreground "$@"
