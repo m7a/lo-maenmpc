@@ -22,6 +22,8 @@
 _build/default/rel/maenmpc /usr/share/mdvl-maenmpc
 _build/default/lib/maenmpc/ebin /usr/share/mdvl-maenmpc/maenmpc/lib/maenmpc-0.1.0
 src /usr/share/mdvl-maenmpc/maenmpc/lib/maenmpc-0.1.0
+config/sys.config /usr/share/mdvl-maenmpc/maenmpc/releases/0.1.0
+config/vm.args /usr/share/mdvl-maenmpc/maenmpc/releases/0.1.0
 maenmpc /usr/bin
 </property>
 
@@ -36,6 +38,10 @@ maenmpc /usr/bin
 	</exec>
 	<!-- allow us to override the symlink with the actual contents here -->
 	<delete dir="_build/default/rel/${masysma.target}/lib/${masysma.target}-0.1.0"
+		followSymlinks="false" removeNotFollowedSymlinks="true"/>
+	<delete file="_build/default/rel/${masysma.target}/releases/0.1.0/vm.args"
+		followSymlinks="false" removeNotFollowedSymlinks="true"/>
+	<delete file="_build/default/rel/${masysma.target}/releases/0.1.0/sys.config"
 		followSymlinks="false" removeNotFollowedSymlinks="true"/>
 </target>
 
