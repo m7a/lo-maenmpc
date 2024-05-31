@@ -290,7 +290,6 @@ single_key(Ctx, Character) ->
 	$q               -> init:stop(0), Ctx;
 	?ceKEY_F(10)     -> init:stop(0), Ctx;
 	?ceKEY_RESIZE    -> ui_resize(Ctx);
-	% TODO NEW KEYBINDINGS / REQUESTS
 	$\n              -> ui_request(Ctx, {ui_selected, Ctx#view.page, play});
 	$a               -> ui_request(Ctx, {ui_selected, Ctx#view.page,
 							enqueue_end});
@@ -304,6 +303,10 @@ single_key(Ctx, Character) ->
 							rating_up});
 	$#               -> ui_request(Ctx, {ui_selected, Ctx#view.page,
 							rating_down});
+	% TODO x undocumented keybindings!
+	$h               -> ui_request(Ctx, {ui_horizontal, Ctx#view.page, -1});
+	$l               -> ui_request(Ctx, {ui_horizontal, Ctx#view.page, +1});
+	?ceKEY_TAB       -> ui_request(Ctx, {ui_horizontal, Ctx#view.page, +1});
 	% TODO F5       - search screen
 	% TODO / ? n p  - search on screen
 	% TODO F8       - output selection

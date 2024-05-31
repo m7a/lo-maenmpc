@@ -164,6 +164,9 @@ handle_call(query_output, _From, Ctx) ->
 			% no claim on cursor possible
 		}
 	end), Ctx};
+handle_call({set_output, {_Idx, Partition, OutputID}}, _From, Ctx) ->
+	% TODO ... CSTAT PERFORM ACTION HERE
+	{reply, ok, Ctx};
 handle_call({enqueue_end, Songs}, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
 		lists:foreach(fun(Song) ->

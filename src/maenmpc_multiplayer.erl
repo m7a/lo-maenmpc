@@ -102,6 +102,8 @@ handle_cast(ui_radio_stop, Ctx) ->
 	{noreply, Ctx};
 handle_cast({ui_selected, Screen, Action}, Ctx) ->
 	{noreply, ui_selected_action(Screen, Action, Ctx)};
+handle_cast({ui_horizontal, Page, Delta}, Ctx) ->
+	{noreply, ui_horizontal_nav(Page, Delta, Ctx)};
 handle_cast({mpd_assign_error, Name, Reason}, Ctx) ->
 	gen_server:cast(Ctx#mpl.ui, {db_error, {offline, Name, Reason}}),
 	{noreply, Ctx};
@@ -533,12 +535,13 @@ ui_query_outputs(Ctx) ->
 								assigned=none},
 		Ctx#mpl.mpd_list
 	),
-	[[PF|_PIT]|_PT] = OutputsRaw#dboutputs.partitions,
-	[OF|_OT] = OutputsRaw#dboutputs.outputs,
 	% TODO z Optionally return cursor from before if valid...
-	Outputs = OutputsRaw#dboutputs{cursor={1, PF, OF#dboutput.output_id}},
+	Outputs = OutputsRaw#dboutputs{cursor=cursor_to_beginning(OutputsRaw)},
 	gen_server:cast(Ctx#mpl.ui, {db_outputs, Outputs}),
 	Ctx#mpl{outputs=Outputs}.
+
+cursor_to_beginning(#dboutputs{partitions=[[PF|_PIT]|_PT], outputs=[OF|_OT]}) ->
+	{1, PF, OF#dboutput.output_id}.
 
 merge_outputs(DBOI = #dboutputs{outputs=IO, partitions=IP, active_set=AI,
 						assigned=ASI},
@@ -588,9 +591,23 @@ ui_scroll(Ctx, Offset, List=#dbscroll{coffset=COffset, qoffset=QOffset,
 		end,
 	ui_query(Ctx, List#dbscroll{csel=NewCSel, coffset=NewCOffset}).
 
+ui_selected_action(output, play, Ctx) ->
+	% say player changes then have to switch player and then after the
+	%   switch apply the given output/partition selection.
+	% say partition changes then have to switch partition and then import
+	%   the selected output into the partition (ignore outcome) and assume
+	%   its ok then
+	% say output changes then have to switch output only
+	CtxPre = apply_player_change(Ctx),
+	% TODO SHOULD PROBABLY RETURN UPDATED OUTPUT INFO / RE-QUERY?
+	% sets:is_element of active interesting for singleplayer?
+	Cursor = CtxPre#mpl.outputs#dboutputs.cursor,
+	call_singleplayer(CtxPre#mpl.mpd_active, {set_output, Cursor}),
+	NewOutputs = CtxPre#mpl.outputs#dboutputs{active_set=Cursor},
+	gen_server:cast(CtxPre#mpl.ui, {db_outputs, NewOutputs}),
+	CtxPre#mpl{outputs=NewOutputs};
 ui_selected_action(Page, _AnyAction, Ctx)
 				when Page =/= queue andalso Page =/= list ->
-	% TODO SELECT OUTPUT / SELECT PARTITION ETC
 	% no operation when not on a music playback page...
 	Ctx;
 ui_selected_action(Page, Action, Ctx) ->
@@ -654,6 +671,58 @@ ui_selected_action(Page, Action, Ctx) ->
 			Ctx
 		end
 	end.
+
+% incremental routine. if output did not change nothing to do at this stage yet.
+apply_player_change(Ctx = #mpl{outputs=OutputsIn}) when element(1,
+				OutputsIn#dboutputs.cursor) =:=
+				element(1, OutputsIn#dboutputs.active_set) ->
+	Ctx;
+apply_player_change(Ctx = #mpl{mpd_list=MPDList, outputs=OutputsIn}) ->
+	NewIdx = element(1, OutputsIn#dboutputs.cursor),
+	% OK we change output for real!
+	ok = gen_server:cast(Ctx#mpl.ui, {db_cidx, NewIdx}),
+	{_Idx, Name} = lists:nth(NewIdx, MPDList),
+	Ctx#mpl{mpd_active = Name}.
+
+ui_horizontal_nav(output, Delta, Ctx = #mpl{outputs=OutputCTX}) ->
+	{Player, Part, OutputID} = OutputCTX#dboutputs.cursor,
+	{PBeforeRev, PAfter} = divide_list_by_pred_r1(fun(X) -> X =:= Part end,
+			lists:nth(Player, OutputCTX#dboutputs.partitions)),
+	NewOutputs = OutputCTX#dboutputs{cursor=if
+	Delta > 0 andalso length(PAfter) > Delta ->
+		{Player, lists:nth(Delta + 1, PAfter), OutputID};
+	Delta < 0 andalso length(PBeforeRev) >= -Delta ->
+		{Player, lists:nth(-Delta, PBeforeRev), OutputID};
+	true ->
+		{ABeforeRev, AAfter} = divide_list_by_pred_r1(fun(#dboutput{
+						player_idx = SPlayer,
+						partition_name = SPartition,
+						output_id = SOutputID}) ->
+				SPlayer =:= Player andalso SPartition =:= Part
+						andalso SOutputID =:= OutputID
+			end, OutputCTX#dboutputs.outputs),
+		if
+		Delta > 0 andalso length(AAfter) > 1 ->
+			ASel = lists:nth(2, AAfter),
+			{ASel#dboutput.player_idx, ASel#dboutput.partition_name,
+						ASel#dboutput.output_id};
+		Delta > 0 andalso length(AAfter) =< 1 ->
+			% Wrap round semantics
+			cursor_to_beginning(OutputCTX);
+		Delta < 0 andalso length(ABeforeRev) >= 1 ->
+			ASel = lists:nth(1, ABeforeRev),
+			{ASel#dboutput.player_idx, ASel#dboutput.partition_name,
+						ASel#dboutput.output_id};
+		true ->
+			% give up, nothing found to match
+			OutputCTX#dboutputs.cursor
+		end
+	end},
+	gen_server:cast(Ctx#mpl.ui, {db_outputs, NewOutputs}),
+	Ctx#mpl{outputs=NewOutputs};
+% ignore the horizontal navigation keys on unsupported pages...
+ui_horizontal_nav(_Other, _Delta, Ctx) ->
+	Ctx.
 
 handle_info(interrupt_idle, Ctx) ->
 	call_singleplayer(Ctx#mpl.mpd_active, request_update),
