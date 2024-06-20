@@ -17,6 +17,13 @@ foldl_scrobbles(Callback, Acc, {URL, Key}) ->
 	lists:foldl(Callback, Acc, maps:get(<<"list">>,
 				jiffy:decode(AllScrobblesRaw, [return_maps]))).
 
+% TODO x Need to include album info otherwise this can return wrong results.
+%        However, it is not that simple:
+%        -> https://github.com/krateng/maloja/issues/301
+%        -> https://github.com/krateng/maloja/issues/362
+%        There could be a workaround by querying raw scrobbles somehow and
+%        parsing-out the info that we want here, however it may be easier to
+%        change the song metadata for now.
 query_playcount(Trackartist, Title, {URL, Key}) ->
 	Query = binary_to_list(iolist_to_binary(io_lib:format(
 		"~s/trackinfo?key=~s&trackartist=~s&title=~s", [

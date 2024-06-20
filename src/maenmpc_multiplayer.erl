@@ -646,7 +646,7 @@ ui_selected_action(Page, Action, Ctx) ->
 		queue_delete when Page =:= queue ->
 			ok = call_singleplayer(Ctx#mpl.mpd_active,
 						{queue_delete, UseItems}),
-			Ctx;
+			proc_range_result(Ctx, out_of_range, List);
 		rating_up when length(UseItems) =:= 1 ->
 			[UIF|_UIT] = UseItems,
 			ok = call_singleplayer(Ctx#mpl.mpd_ratings,
@@ -655,11 +655,13 @@ ui_selected_action(Page, Action, Ctx) ->
 			%        optimization here: No need to query the entire
 			%        view again after only one known item changed!
 			%        Same for rating_down...
+			% TODO OCCASIONALLY CRASHES (MUST BE SOME SORT OF RACE CONDITION WITH is_online?) - IT MAY BE RELATED TO THE TIMER'S WORKING? / A REAL GOOD SOLUTION TO THIS WOULD BE HAVE THE SINGLEPLAYER RETURN THE CHANGED ENTRY AND HERE PATCH IT INTO THE DISPLAY. THEN NOTHING NEEDS TO BE QUERIED WHEN CHANGING RATINGS...?
 			proc_range_result(Ctx, out_of_range, List);
 		rating_down when length(UseItems) =:= 1 ->
 			[UIF|_UIT] = UseItems,
 			ok = call_singleplayer(Ctx#mpl.mpd_ratings,
 						{rating, -1, UIF}),
+			% TODO OCCASIONALLY CRASHES (MUST BE SOME SORT OF RACE CONDITION WITH is_online?)
 			proc_range_result(Ctx, out_of_range, List);
 		_Other ->
 			error_logger:info_msg("-> ignored ~w", [Action]), % TODO FOR DEBUG

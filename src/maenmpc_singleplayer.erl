@@ -50,13 +50,6 @@ handle_call(is_online, _From, Ctx) ->
 handle_call(request_update, _From, Ctx) ->
 	maenmpc_sync_idle:interrupt_no_tx(Ctx#spl.syncidle),
 	{reply, ok, Ctx};
-handle_call({mpd_idle, Name, Subsystems, Conn}, _From, Ctx) ->
-	Ctx1 = update_playing_info(Name, Conn, Ctx),
-	case lists:member(playlist, Subsystems) of
-	true   -> gen_server:cast(Ctx1#spl.db, {db_playlist_changed, Name});
-	_Other -> ok
-	end,
-	{reply, ok, Ctx1};
 handle_call({query_by_keys, Keys}, _From, Ctx) ->
 	% replaces populate with conn
 	% (slightly less efficient, but more regular approach)
@@ -229,19 +222,6 @@ handle_call(_Call, _From, Ctx) ->
 %is_status_subsystem(options) -> true;  % repeat, random, crossfade, replay gain
 %is_status_subsystem(_Other)  -> false.
 
-update_playing_info(Name, Conn, Ctx) ->
-	% state, audio, volume, repeat, random, single, consume, xfade,
-	% updating_db, time
-	Status = erlmpd:status(Conn),
-	% file [uri], Artist, Date, Album, Track, Title, Time [duration],
-	CurrentSong = parse_metadata(erlmpd:currentsong(Conn), Ctx),
-	send_playing_info(Name, Status, case CurrentSong#dbsong.key =:=
-					Ctx#spl.current_song#dbsong.key of
-			true  -> Ctx;
-			false -> Ctx#spl{current_song=
-					query_rating(CurrentSong, Conn, Ctx)}
-			end).
-
 parse_metadata({error, Descr}, Ctx) ->
 	gen_server:cast(Ctx#spl.db, {mpd_assign_error, unknown, Descr}),
 	maenmpc_erlmpd:epsilon_song(Ctx#spl.len);
@@ -333,8 +313,33 @@ handle_cast(Msg={mpd_assign_error, _MPDName, _Reason}, Ctx) ->
 	% bubble-up error
 	gen_server:cast(Ctx#spl.db, Msg),
 	{noreply, Ctx};
+handle_cast({mpd_idle, Name, Subsystems}, Ctx) ->
+	{noreply, maenmpc_sync_idle:run_transaction(
+						Ctx#spl.syncidle, fun(Conn) ->
+		Ctx1 = update_playing_info(Name, Conn, Ctx),
+		case lists:member(playlist, Subsystems) of
+			true   -> gen_server:cast(Ctx1#spl.db,
+						{db_playlist_changed, Name});
+			_Other -> ok
+		end,
+		Ctx1
+	end)};
 handle_cast(_Cast, Ctx) ->
 	{noreply, Ctx}.
+
+update_playing_info(Name, Conn, Ctx) ->
+	% state, audio, volume, repeat, random, single, consume, xfade,
+	% updating_db, time
+	Status = erlmpd:status(Conn),
+	% file [uri], Artist, Date, Album, Track, Title, Time [duration],
+	CurrentSong = parse_metadata(erlmpd:currentsong(Conn), Ctx),
+	send_playing_info(Name, Status, case CurrentSong#dbsong.key =:=
+					Ctx#spl.current_song#dbsong.key of
+			true  -> Ctx;
+			false -> Ctx#spl{current_song=
+					query_rating(CurrentSong, Conn, Ctx)}
+			end).
+
 
 handle_info(_Message,    Ctx)         -> {noreply, Ctx}.
 code_change(_OldVersion, Ctx, _Extra) -> {ok,      Ctx}.

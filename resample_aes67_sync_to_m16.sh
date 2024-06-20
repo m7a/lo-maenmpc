@@ -1,6 +1,14 @@
 #!/bin/sh -eu
 # Script to Re-Sample Audio 1.1.0, (c) 2024 Ma_Sys.ma <info@masysma.net>
 
+# General useful commands
+# $ abcde -o flac -a default,embedalbumart        # copy music from CD
+# $ loudgain -a -k -s e *.flac                    # for each album
+#
+# Single file commands
+# $ loudgain -r           -k -s e FILE.flac
+# $ loudgain -I3 -S -L -r -k -s e FILE.mp3
+
 # NOTE The script cannot currently detect modifications for album/single
 #      entries, only for files. For the other data types, the respective
 #      directory needs to be deleted from target prior to running

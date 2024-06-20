@@ -35,19 +35,16 @@ interrupt_no_tx(Name) ->
 
 handle_event(cast, {mpd_assign, _Name, Conn}, init, Ctx) ->
 	{next_state, idle, Ctx#syncidle{conn=Conn}};
-handle_event(cast, Msg={mpd_assign_error, _Name, _Reason}, init,
-						Ctx = #syncidle{up=Notify}) ->
-	gen_server:cast(Notify, Msg),
+handle_event(cast, Msg={mpd_assign_error, _Name, _Reason}, init, Ctx) ->
+	gen_server:cast(Ctx#syncidle.up, Msg),
 	{next_state, offline, Ctx};
 
-handle_event(cast, {mpd_idle, Name, Result, FromMPD}, idle,
-				Ctx = #syncidle{up=Notify, conn=Conn}) ->
-	ok = gen_server:call(Notify, {mpd_idle, Name, Result, Conn}),
+handle_event(cast, {mpd_idle, Name, Result, FromMPD}, idle, Ctx) ->
+	gen_server:cast(Ctx#syncidle.up, {mpd_idle, Name, Result}),
 	ok = gen_server:call(FromMPD, mpd_idle_enter),
 	{keep_state, Ctx};
-handle_event(cast, {mpd_idle, Name, Result, FromMPD}, interrupted,
-				Ctx = #syncidle{up=Notify, conn=Conn}) ->
-	ok = gen_server:call(Notify, {mpd_idle, Name, Result, Conn}),
+handle_event(cast, {mpd_idle, Name, Result, FromMPD}, interrupted, Ctx) ->
+	gen_server:cast(Ctx#syncidle.up, {mpd_idle, Name, Result}),
 	ok = gen_server:call(FromMPD, mpd_idle_enter),
 	{next_state, idle, Ctx};
 handle_event(cast, {mpd_idle, _Name, _Result, FromMPD}, tx_pre,
