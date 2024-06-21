@@ -646,17 +646,10 @@ ui_selected_action(Page, Action, Ctx) ->
 						length(UseItems) =:= 1 ->
 			ok = call_singleplayer(Ctx#mpl.mpd_active,
 						{queue_delete, UseItems}),
-			% restriction to one item is currently not a real one
-			% hence we can perform this operation easily here.
-			% Otherwise also possible to extend to multiple items
-			% by making use of custom list processing function in
-			% favor of lists:keydelete...
-			[UIF|_Eps] = UseItems,
-			QueueNew = List#dbscroll{
-				cnt=lists:sublist(Cnt, CSel) ++ lists:sublist(
-					Cnt, CSel + 2, length(Cnt) - CSel - 2),
-				total=List#dbscroll.total - 1
-			},
+			QueueNew = List#dbscroll{cnt=lists:sublist(Cnt, CSel) ++
+				lists:sublist(Cnt, CSel + 1 + length(UseItems),
+				length(Cnt) - CSel - 1 - length(UseItems)),
+				total=List#dbscroll.total - 1},
 			% update UI and limits
 			ui_scroll(Ctx#mpl{current_queue=QueueNew}, 0, QueueNew);
 		rating_up when length(UseItems) =:= 1 ->
