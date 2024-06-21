@@ -453,7 +453,6 @@ sum_artists(Artists) ->
 	lists:foldl(fun({_Artist, Songs}, Acc) -> Songs + Acc end, 0, Artists).
 
 query_playcount(Ctx, List) when Ctx#mpl.maloja =:= {none, none} orelse
-			length(List#dbscroll.cnt) < 0 orelse
 			length(List#dbscroll.cnt) < List#dbscroll.csel ->
 	List;
 query_playcount(Ctx, List=#dbscroll{cnt=Cnt, csel=CSel}) ->
@@ -643,11 +642,23 @@ ui_selected_action(Page, Action, Ctx) ->
 			call_singleplayer(Ctx#mpl.mpd_active,
 						{enqueue_current, UseItems}),
 			Ctx;
-		queue_delete when Page =:= queue ->
-			% TODO THIS STILL QUERIES FAR TOO MUCH. NEED TO UPDATE IT IN A SMARTER WAY BUT IT MIGHT BE LIST SPECIFIC?
+		queue_delete when Page =:= queue andalso
+						length(UseItems) =:= 1 ->
 			ok = call_singleplayer(Ctx#mpl.mpd_active,
 						{queue_delete, UseItems}),
-			proc_range_result(Ctx, out_of_range, List);
+			% restriction to one item is currently not a real one
+			% hence we can perform this operation easily here.
+			% Otherwise also possible to extend to multiple items
+			% by making use of custom list processing function in
+			% favor of lists:keydelete...
+			[UIF|_Eps] = UseItems,
+			QueueNew = List#dbscroll{
+				cnt=lists:sublist(Cnt, CSel) ++ lists:sublist(
+					Cnt, CSel + 2, length(Cnt) - CSel - 2),
+				total=List#dbscroll.total - 1
+			},
+			% update UI and limits
+			ui_scroll(Ctx#mpl{current_queue=QueueNew}, 0, QueueNew);
 		rating_up when length(UseItems) =:= 1 ->
 			edit_rating(Ctx, Page, Cnt, UseItems, +1);
 		rating_down when length(UseItems) =:= 1 ->

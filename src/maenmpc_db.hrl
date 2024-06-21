@@ -20,7 +20,7 @@
 % coffset guaranteed to be 0 for UI usage
 % -- db view --
 % qoffset=0 means at upper boundary, len(cnt)==total means entire DB covered
-% user_data(type=queue) = {artists,beforerev,after}
+% user_data(type=list) = {artists,beforerev,after}
 -record(dbscroll, {type, cnt, coffset, csel, total, last_query_len, qoffset,
 		user_data}).
 -type dbscoll() :: #dbscroll{type::atom(), cnt::[dbsong()], coffset::integer(),
