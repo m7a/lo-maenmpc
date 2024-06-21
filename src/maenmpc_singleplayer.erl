@@ -207,10 +207,13 @@ handle_call({rating, Direction, Song}, _From, Ctx) when Ctx#spl.is_rating ->
 		NewR = compute_and_transform_rating(Ctx, Direction,
 							Song#dbsong.rating),
 		if
-		NewR =:= -1 -> erlmpd:sticker_delete(Conn, "song", URI,
-								"rating");
-		true        -> ok = erlmpd:sticker_set(Conn, "song", URI,
-					"rating", integer_to_list(NewR))
+		NewR =:= -1 ->
+			erlmpd:sticker_delete(Conn, "song", URI, "rating"),
+			?RATING_UNRATED;
+		true ->
+			erlmpd:sticker_set(Conn, "song", URI, "rating",
+							integer_to_list(NewR)),
+			maenmpc_erlmpd:convert_rating(NewR)
 		end
 	end), Ctx};
 % TODO ALL OTHER INTERACTIVE FUNCTION STUFF GOES HERE...
