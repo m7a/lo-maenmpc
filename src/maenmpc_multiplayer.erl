@@ -20,7 +20,7 @@ init([NotifyToUI, NotifyToRadio]) ->
 			lists:zip(MPDList, lists:seq(1, length(MPDList)))],
 	gen_server:cast(NotifyToUI, {db_cidx,
 				proplists:get_value(MPDFirst, MPDListIdx)}),
-	{ok, #mpl{
+	{ok, reset_views(#mpl{
 		ui             = NotifyToUI,
 		radio          = NotifyToRadio,
 		alsa           = ALSAHWInfo,
@@ -30,6 +30,14 @@ init([NotifyToUI, NotifyToRadio]) ->
 		maloja         = maenmpc_maloja:conn(Maloja),
 		outputs        = none,
 		current_song   = maenmpc_erlmpd:epsilon_song(length(MPDList)),
+		current_filter = {lnot, {land, [{tagop, artist, eq, ""},
+						{tagop, album,  eq, ""},
+						{tagop, title,  eq, ""}]}}
+	})}.
+
+reset_views(Ctx) ->
+	Ctx#mpl{current_song   = maenmpc_erlmpd:epsilon_song(length(
+							Ctx#mpl.mpd_list)),
 		current_queue  = #dbscroll{type=queue, cnt=[], coffset=0,
 					csel=0, total=-1, qoffset=0,
 					last_query_len=0, user_data=none},
@@ -38,11 +46,7 @@ init([NotifyToUI, NotifyToRadio]) ->
 					qoffset=0, user_data={[], [], []}},
 		current_radio  = #dbscroll{type=radio, cnt=[], coffset=0,
 					csel=0, total=0, last_query_len=0,
-					qoffset=0, user_data=-1},
-		current_filter = {lnot, {land, [{tagop, artist, eq, ""},
-						{tagop, album,  eq, ""},
-						{tagop, title,  eq, ""}]}}
-	}}.
+					qoffset=0, user_data=-1}}.
 
 handle_call(_Call, _From, Ctx) ->
 	{reply, ok, Ctx}.
@@ -690,7 +694,7 @@ apply_player_change(Ctx = #mpl{mpd_list=MPDList, outputs=OutputsIn}) ->
 	% OK we change output for real!
 	ok = gen_server:cast(Ctx#mpl.ui, {db_cidx, NewIdx}),
 	{Name, _Idx} = lists:nth(NewIdx, MPDList),
-	Ctx#mpl{mpd_active = Name}.
+	reset_views(Ctx#mpl{mpd_active = Name}).
 
 ui_horizontal_nav(output, Delta, Ctx = #mpl{outputs=OutputCTX}) ->
 	{Player, Part, OutputID} = OutputCTX#dboutputs.cursor,
