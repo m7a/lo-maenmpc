@@ -98,7 +98,8 @@ handle_call({query_queue, ItemsRequested, CurrentQ}, _From, Ctx) ->
 				Ctx1P#spl.mpd_plength - ItemsRequested))};
 			false -> {Ctx, CurrentQ#dbscroll.qoffset}
 			end,
-		Q1A = min(Q0A + ItemsRequested, Ctx1#spl.mpd_plength),
+		Q1A = max(Q0A + 1, min(Q0A + ItemsRequested,
+							Ctx1#spl.mpd_plength)),
 		{CurrentQ#dbscroll{
 			cnt=[query_rating(parse_metadata(El, Ctx1), Conn, Ctx1)
 				|| El <- erlmpd:playlistinfo(Conn, {Q0A, Q1A})],
