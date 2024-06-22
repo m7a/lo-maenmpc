@@ -295,13 +295,20 @@ ui_simple_tx(song_next, Conn, _Ctx) ->
 
 enqueue_after_current(Songs, Conn, Ctx) ->
 	lists:foldl(fun({Song, Offset}, Acc) ->
-			ID = erlmpd:addid_relative(Conn, element(Ctx#spl.idx,
-						Song#dbsong.uris), Offset),
-			case Acc of
-			-1   -> ID;
-			_Any -> Acc
-			end
-		end, -1, lists:zip(Songs, lists:seq(0, length(Songs) - 1))).
+		URI = element(Ctx#spl.idx, Song#dbsong.uris),
+		ID  = case erlmpd:addid_relative(Conn, URI, Offset) of
+			{error, {mpd_error, "55", _EPos, "addid", _NoCurSon}} ->
+				% Special case no current song need to insert
+				% using absolute offset...
+				erlmpd:addid(Conn, URI, Ctx#spl.mpd_plength +
+									Offset);
+			IDOK -> IDOK
+			end,
+		case Acc of
+		-1   -> ID;
+		_Any -> Acc
+		end
+	end, -1, lists:zip(Songs, lists:seq(0, length(Songs) - 1))).
 
 compute_and_transform_rating(_Ctx, Direction, OldRating) ->
 	Delta = Direction * 20,
