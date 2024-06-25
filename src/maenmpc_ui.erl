@@ -16,7 +16,8 @@
 	height, width,
 	wnd_song, wnd_card, wnd_main, wnd_sel, wnd_sel_card, wnd_status,
 	wnd_keys,
-	db, cidx, page, storech
+	db, cidx, page, storech,
+	input_mode, input_string, input_subpos, input_max, input_y, input_x
 }).
 
 init([NotifyToDB]) ->
@@ -27,8 +28,8 @@ init([NotifyToDB]) ->
 	cecho:keypad(?ceSTDSCR, true),
 	{Height, Width} = cecho:getmaxyx(),
 	{ok, init_windows(#view{height = Height, width = Width,
-			db = NotifyToDB, cidx = 1, page = help, storech = $_},
-			"Initializing...")}.
+			db = NotifyToDB, cidx = 1, page = help, storech = $_,
+			input_mode = none}, "Initializing...")}.
 
 init_color_pairs() ->
 	cecho:init_pair(?CPAIR_DEFAULT,     ?ceCOLOR_WHITE,  ?ceCOLOR_BLACK),
@@ -166,7 +167,8 @@ draw_page_help(Ctx) ->
 		[<<"↓ j  l"/utf8>>,
 		 <<"← -"/utf8>>,      <<"Volume down"/utf8>>,
 		 <<"r"/utf8>>,        <<"repeat"/utf8>>,
-		 <<"CTRL-K/J"/utf8>>, <<"queue:  Move item"/utf8>>],
+		%<<"CTRL-K/J"/utf8>>, <<"queue:  Move item"/utf8>>
+		 [],                  []],
 		[<<"PgUp"/utf8>>,
 		 <<"←- s"/utf8>>,     <<"stop"/utf8>>,
 		 <<"z"/utf8>>,        <<"random"/utf8>>,
@@ -185,11 +187,13 @@ draw_page_help(Ctx) ->
 		 <<"T"/utf8>>,        <<"radio:  stop radio"/utf8>>],
 		[<<"Tab"/utf8>>,
 		 <<">"/utf8>>,        <<"next"/utf8>>,
-		 <<"p"/utf8>>,        <<"podcasts"/utf8>>,
+		%<<"p"/utf8>>,        <<"podcasts"/utf8>>,
+		 [],                  [],
 		 [],                  []],
 		[<<"F1..F10"/utf8>>,
 		 <<"<"/utf8>>,        <<"prev"/utf8>>,
-		 <<"Space"/utf8>>,    <<"expand"/utf8>>,
+		%<<"Space"/utf8>>,    <<"expand"/utf8>>,
+		 [],                  [],
 		 <<"/ ? n p"/utf8>>,  <<"search on screen"/utf8>>]
 	]),
 	cecho:wrefresh(Ctx#view.wnd_main),
@@ -220,10 +224,15 @@ handle_call(_Call, _From, Context) ->
 	{reply, ok, Context}.
 
 handle_cast({getch, Character}, Ctx) ->
-	{noreply, case Ctx#view.storech =:= $_ of
+	{noreply, if
+		Ctx#view.input_mode =/= none ->
+			input_mode_keypress(Ctx, Character);
+		Ctx#view.storech =:= $_ ->
+			case priority_action(Ctx, Character) of
+			{next, Ctx1} -> single_key_action(Ctx1, Character);
+			{_Any, Ctx1} -> Ctx1
+			end;
 		true ->
-			single_key(Ctx, Character);
-		false ->
 			Ctx2 = Ctx#view{storech=$_},
 			case {Ctx#view.storech, Character} of
 			{$g, $g} -> ui_scroll(Ctx2, top);
@@ -249,7 +258,72 @@ handle_cast({db_outputs, Outputs}, Ctx) when Ctx#view.page =:= output ->
 handle_cast(_Cast, Ctx) ->
 	{noreply, Ctx}.
 
-single_key(Ctx, Character) ->
+input_mode_keypress(Ctx0, Character) ->
+	case priority_action(Ctx0, Character) of
+	{stop, Ctx} -> leave_input_mode(Ctx);
+	{_Any, Ctx} ->
+		% similar to d5mantui4_ui.erl
+		case Character of
+		$\n          -> input_mode_enter(Ctx);
+		?ceKEY_ESC   -> leave_input_mode(Ctx);
+		?ceKEY_LEFT  -> update_cursor(Ctx#view{input_subpos = max(0,
+					Ctx#view.input_subpos - 1)});
+		?ceKEY_RIGHT -> update_cursor(Ctx#view{input_subpos = min(
+					length(Ctx#view.input_string),
+					Ctx#view.input_subpos + 1)});
+		?ceKEY_END   -> update_cursor(Ctx#view{input_subpos =
+					length(Ctx#view.input_string)});
+		?ceKEY_HOME  -> update_cursor(Ctx#view{input_subpos = 0});
+		?ceKEY_DEL when Ctx#view.input_subpos < length(
+							Ctx#view.input_string)
+		             -> delete_character(Ctx, 0);
+		?ceKEY_DEL   -> Ctx;
+		% Can delete the forward slash for searching to cancel search.
+		?ceKEY_BACKSPACE when Ctx#view.input_subpos =:= 0 andalso
+					Ctx#view.input_mode =:= search ->
+				leave_input_mode(Ctx);
+		?ceKEY_BACKSPACE when Ctx#view.input_subpos > 0
+		             -> delete_character(Ctx, -1);
+		?ceKEY_BACKSPACE -> Ctx;
+		% TODO x WHAT IF WRITING BEYOND LINE LENGTH? (see d5mantui)
+		% TODO x Not really unicode-capable!
+		Ch when Ch < 256 ->
+			{Prefix, Suffix} = lists:split(Ctx#view.input_subpos,
+							Ctx#view.input_string),
+			update_input(Ctx#view{
+				input_string = Prefix ++ [Character|Suffix],
+				input_subpos = Ctx#view.input_subpos + 1
+			});
+		% Unlike D5Man here we may cover up our error display hence
+		% don't signal this to the user for now.
+		_Any2 -> Ctx
+		end
+	end.
+
+priority_action(Ctx, Character) ->
+	% Special Search Stop Outcome - some operations that cancel regular
+	% things (like forms) should continue in forward-slash search.
+	SSSO = case Ctx#view.input_mode of search -> cont; _Else  -> stop end,
+	case Character of
+	?ceKEY_UP     -> {SSSO, ui_scroll(Ctx, -1)};
+	?ceKEY_DOWN   -> {SSSO, ui_scroll(Ctx, +1)};
+	?ceKEY_PGDOWN -> {cont, ui_scroll(Ctx, +current_page_height(Ctx))};
+	?ceKEY_PGUP   -> {cont, ui_scroll(Ctx, -current_page_height(Ctx))};
+	?ceKEY_F(1)   -> {stop, draw_page_help(Ctx#view{page=help})};
+	?ceKEY_F(2)   -> {SSSO, ui_request(Ctx#view{page=queue},
+				{ui_query, queue, main_height(Ctx)-1})};
+	?ceKEY_F(4)   -> {SSSO, ui_request(Ctx#view{page=list},
+				{ui_query, list,  main_height(Ctx)})};
+	?ceKEY_F(6)   -> {SSSO, ui_request(Ctx#view{page=radio},
+				{ui_query, radio, main_height(Ctx)})};
+	?ceKEY_F(8)   -> {stop, ui_request(Ctx#view{page=output},
+				{ui_query, output})};
+	?ceKEY_F(10)  -> init:stop(0), {stop, Ctx};
+	?ceKEY_RESIZE -> {cont, ui_resize(Ctx)};
+	_Any          -> {next, Ctx}
+	end.
+
+single_key_action(Ctx, Character) ->
 	case Character of
 	$-               -> ui_request(Ctx, {ui_simple, volume_change, -1});
 	?ceKEY_LEFT      -> ui_request(Ctx, {ui_simple, volume_change, -1});
@@ -268,28 +342,13 @@ single_key(Ctx, Character) ->
 	$R               -> ui_request(Ctx, ui_radio_start);
 	$T               -> ui_request(Ctx, ui_radio_stop);
 	$k               -> ui_scroll(Ctx, -1);
-	?ceKEY_UP        -> ui_scroll(Ctx, -1);
 	$j               -> ui_scroll(Ctx, +1);
-	?ceKEY_DOWN      -> ui_scroll(Ctx, +1);
-	?ceKEY_PGDOWN    -> ui_scroll(Ctx, +current_page_height(Ctx));
-	?ceKEY_PGUP      -> ui_scroll(Ctx, -current_page_height(Ctx));
 	?ceKEY_HOME      -> ui_scroll(Ctx, top);
 	$g               -> Ctx#view{storech=Character};
 	$Z               -> Ctx#view{storech=Character};
 	?ceKEY_END       -> ui_scroll(Ctx, bottom);
 	$G               -> ui_scroll(Ctx, bottom);
-	?ceKEY_F(1)      -> draw_page_help(Ctx#view{page=help});
-	?ceKEY_F(2)      -> ui_request(Ctx#view{page=queue},
-				{ui_query, queue, main_height(Ctx)-1});
-	?ceKEY_F(4)      -> ui_request(Ctx#view{page=list},
-				{ui_query, list,  main_height(Ctx)});
-	?ceKEY_F(6)      -> ui_request(Ctx#view{page=radio},
-				{ui_query, radio, main_height(Ctx)});
-	?ceKEY_F(8)      -> ui_request(Ctx#view{page=output},
-				{ui_query, output});
 	$q               -> init:stop(0), Ctx;
-	?ceKEY_F(10)     -> init:stop(0), Ctx;
-	?ceKEY_RESIZE    -> ui_resize(Ctx);
 	$\n              -> ui_request(Ctx, {ui_selected, Ctx#view.page, play});
 	$a               -> ui_request(Ctx, {ui_selected, Ctx#view.page,
 							enqueue_end});
@@ -307,6 +366,7 @@ single_key(Ctx, Character) ->
 	$h               -> ui_request(Ctx, {ui_horizontal, Ctx#view.page, -1});
 	$l               -> ui_request(Ctx, {ui_horizontal, Ctx#view.page, +1});
 	?ceKEY_TAB       -> ui_request(Ctx, {ui_horizontal, Ctx#view.page, +1});
+	$/               -> ui_search_start(Ctx);
 	% TODO F5       - search screen
 	% TODO / ? n p  - search on screen
 	% TODO F8       - output selection
@@ -660,6 +720,78 @@ ui_resize(Ctx) ->
 				Ctx#view.wnd_status, Ctx#view.wnd_keys]),
 	{Height, Width} = cecho:getmaxyx(),
 	init_windows(Ctx#view{height=Height, width=Width}, "resized...").
+
+ui_search_start(Ctx) ->
+	cecho:werase(Ctx#view.wnd_status),
+	cecho:attron(Ctx#view.wnd_status, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
+	cecho:mvwaddstr(Ctx#view.wnd_status, 0, 0, "/"),
+	cecho:attroff(Ctx#view.wnd_status, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
+	cecho:wrefresh(Ctx#view.wnd_status),
+	initialize_input(Ctx#view{input_mode=search,
+			input_max=Ctx#view.width - 1, input_y=0, input_x=1}).
+
+initialize_input(Ctx) ->
+	Ctx#view{input_string = [], input_subpos = 0}.
+
+% d5man4_ui.erl
+update_cursor(Ctx) ->
+	case identify_input_window(Ctx) of
+	none -> Ctx;
+	Wnd  -> cecho:wmove(Wnd, 0, Ctx#view.input_subpos + Ctx#view.input_x),
+		cecho:wrefresh(Wnd),
+		Ctx
+	end.
+
+% d5man4_ui.erl
+delete_character(Ctx, Delta) ->
+	case identify_input_window(Ctx) of
+	none -> Ctx;
+	Wnd  -> {Prefix, [_Drop|Suffix]} = lists:split(Ctx#view.input_subpos +
+						Delta, Ctx#view.input_string),
+		NewQuery = Prefix ++ Suffix,
+		cecho:attron(Wnd, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
+		cecho:mvwaddstr(Wnd, Ctx#view.input_y, Ctx#view.input_x +
+							length(NewQuery), " "),
+		cecho:attroff(Wnd, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
+		update_input(Ctx#view{input_string = NewQuery,
+			input_subpos = Ctx#view.input_subpos + Delta})
+	end.
+
+% d5man4_ui.erl
+update_input(Ctx) ->
+	case identify_input_window(Ctx) of
+	none -> Ctx;
+	Wnd  -> cecho:attron(Wnd, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
+		cecho:mvwaddstr(Wnd, Ctx#view.input_y, Ctx#view.input_x,
+							Ctx#view.input_string),
+		cecho:attroff(Wnd, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
+		update_cursor(Ctx)
+	end.
+
+identify_input_window(Ctx=#view{input_mode=search}) -> Ctx#view.wnd_status;
+identify_input_window(_Ctx) -> none.
+
+leave_input_mode(Ctx) ->
+	case Ctx#view.input_mode of
+	search ->
+		% Escape in search mode drops input without confirmation!
+		cecho:werase(Ctx#view.wnd_status),
+		cecho:wrefresh(Ctx#view.wnd_status);
+	% TODO x OTHER MODES MAY NEED TO ACCEPT/REJECT THE INPUT HERE BTW. IT WOULD MAKE SENSE TO ALLOW GOING BACK TO IMPLIED NORMAL MODE FROM THE SEARCH FORM HERE!
+	_Any ->
+		ok
+	end,
+	Ctx#view{input_mode=none}.
+
+input_mode_enter(Ctx) ->
+	case Ctx#view.input_mode of
+	search ->
+		% ... TODO ASTAT SEND A “SEARCH” REQUEST TO MULTIPLAYER!
+		ok;
+	_Any ->
+		ok
+	end,
+	leave_input_mode(Ctx).
 
 handle_info(_Message,    Context)         -> {noreply, Context}.
 code_change(_OldVersion, Context, _Extra) -> {ok,      Context}.
