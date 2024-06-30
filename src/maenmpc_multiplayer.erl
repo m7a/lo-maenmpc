@@ -6,6 +6,7 @@
 -record(mpl, {
 	ui, radio, alsa, mpd_list, mpd_active, mpd_ratings,
 	maloja, outputs,
+	search_page, search_term, search_cache, search_offset, search_sel,
 	current_song, current_queue, current_list, current_radio, current_filter
 }).
 
@@ -120,6 +121,9 @@ handle_cast({radio_log, ID, Info}, Ctx=#mpl{current_radio=Radio}) ->
 				cnt=Radio#dbscroll.cnt ++ [{ID, Info}]},
 	transform_and_send_to_ui(Ctx, NewRadio, NewRadio#dbscroll.user_data),
 	{noreply, Ctx#mpl{current_radio=NewRadio}};
+handle_cast({ui_search, Page, String}, Ctx) ->
+	{noreply, search(Ctx#mpl{search_page=Page, search_term=String,
+			search_cache=[], search_sel=0, search_offset=0})};
 handle_cast(_Cast, Ctx) ->
 	{noreply, Ctx}.
 
@@ -734,6 +738,31 @@ ui_horizontal_nav(output, Delta, Ctx = #mpl{outputs=OutputCTX}) ->
 	Ctx#mpl{outputs=NewOutputs};
 % ignore the horizontal navigation keys on unsupported pages...
 ui_horizontal_nav(_Other, _Delta, Ctx) ->
+	Ctx.
+
+search(Ctx=#mpl{search_cache=SS, search_sel=SI, search_offset=SO}) ->
+	if
+	% ignore out of range search?
+	% also how about the “end” of search/SO too big?
+	SO + SI < 0                    -> Ctx;
+	SI < 0 orelse SI >= length(SS) -> search_query(Ctx);
+	true                           -> search_goto(lists:nth(SI, SS), Ctx)
+	end.
+
+% TODO It is out of range, query for more results...
+% TODO x THERE IS A “sort” parameter to be passed to such functions that should be useful!
+% TODO ALSO SMALL PROBLEM WRT. MULTIPLE PLAYER - INTERVAL LOGIC IS NOT PREPARED FOR THIS. ALSO SAY ONE PLAYERS RESULTS ARE ENTIRELY BEFORE THE OTHER'S WHAT DOES IT MEAN FOR US?
+% -> THE TRICK IS TO ONLY USE N/2 RESULTS THEN QUERY AGAIN AND WE ARE SAFE!
+% CAN SEARCH ON AT LEAST THE FOLLOWING PAGES:
+% -queue (MPD: ) playlistsearch FILTER sort TYPE window START:END \_ equal except for command name!
+% -list  (MPD: ) search         FILTER sort TYPE window START:END /
+% -radio (search in strings)
+% NEED TO CREATE NEW COMMANDS IN ERLMPD. ALSO THE QUESTION WRT. THE ADDITION OF “WINDOW” PARAMETERS BECOMES RELEVANT? WOULD WE ALTERNATIVELY “SEARCH BY ARTIST” OR SOMETHING? WOULD ANSWER THE FOLLOW UP QUESTION FOR GOTO BUT OTOH MAY BE SLOWER... ALL UNCLEAR
+search_query(Ctx) ->
+	Ctx.
+
+% TODO Move display cursor to the search result (if it is already loaded that is...)
+search_goto(Result, Ctx) ->
 	Ctx.
 
 handle_info(interrupt_idle, Ctx) ->

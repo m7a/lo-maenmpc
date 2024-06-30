@@ -286,7 +286,7 @@ input_mode_keypress(Ctx0, Character) ->
 		             -> delete_character(Ctx, -1);
 		?ceKEY_BACKSPACE -> Ctx;
 		% TODO x WHAT IF WRITING BEYOND LINE LENGTH? (see d5mantui)
-		% TODO x Not really unicode-capable!
+		% TODO x Not really unicode-capable! To do this switch from lists: to string:
 		Ch when Ch < 256 ->
 			{Prefix, Suffix} = lists:split(Ctx#view.input_subpos,
 							Ctx#view.input_string),
@@ -784,14 +784,11 @@ leave_input_mode(Ctx) ->
 	Ctx#view{input_mode=none}.
 
 input_mode_enter(Ctx) ->
-	case Ctx#view.input_mode of
-	search ->
-		% ... TODO ASTAT SEND A “SEARCH” REQUEST TO MULTIPLAYER!
-		ok;
-	_Any ->
-		ok
-	end,
-	leave_input_mode(Ctx).
+	leave_input_mode(case Ctx#view.input_mode of
+	search -> ui_request(Ctx, {ui_search, Ctx#view.page,
+							Ctx#view.input_string});
+	_Any   -> Ctx
+	end).
 
 handle_info(_Message,    Context)         -> {noreply, Context}.
 code_change(_OldVersion, Context, _Extra) -> {ok,      Context}.
