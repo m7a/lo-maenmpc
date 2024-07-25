@@ -13,7 +13,7 @@ mtype = {
 	// syncidle messages in
 	M_MPD_IDLE, M_INTERRUPT_NO_TX, M_TX_BEGIN, M_TX_END,
 	// syncidle messages out
-	M_IDLE_ENTER, M_REPLY_TO_PROCID, M_ERLMPD_NOIDLE
+	M_IDLE_ENTER, M_ERLMPD_NOIDLE
 	// non-syncidle messages
 	M_REQUEST_UPDATE
 }
@@ -77,18 +77,17 @@ active proctype syncidle() {
 		:: else ->
 			assert(0); // not expected to happen
 		fi
-progress:
+accept:
 	od
 }
 
 active proctype mpd() {
 	do
-	:: syncidle_down ? M_MPD_IDLE -> // cast / control input
-		is_idle = false;
-		syncidle_in ! M_MPD_IDLE;
+	// syncidle_down ? M_MPD_IDLE does not exist in the simulation in
+	// reality M_IDLE_ENTER would self-message to trigger this
 	:: syncidle_down ? M_IDLE_ENTER ->
 		is_idle = true;
-		syncidle_down_ack ! M_IDLE_ENTER;
+		syncidle_down_ack ! M_IDLE_ENTER
 	:: syncidle_down ? M_ERLMPD_NOIDLE ->
 		if
 		:: is_idle ->
@@ -101,19 +100,14 @@ active proctype mpd() {
 			// call altogether...
 			true
 		fi
-accept:
-	od
-}
-
-active proctype mpd_server_emul() {
-	bool wait_ack = false;
-	do
-	:: (is_idle && !wait_ack) ->
-		wait_ack = true;
-		syncidle_down ! M_MPD_IDLE;
-	:: (!is_idle && wait_ack) ->
-		wait_ack = false;
+	// can nondeterministically also decide to leave idle state.
+	// this is intended to provide the emulation mpd_server_emul completely?
+	:: is_idle ->
+		printf("mpd: nondet leave idle\n");
+		is_idle = false;
+		syncidle_in ! M_MPD_IDLE
 	:: true ->
+		printf("mpd: nondet stay put\n");
 		true
 accept:
 	od
@@ -127,7 +121,7 @@ active proctype singleplayer() {
 		// callback goes here ...
 progress:
 		syncidle_in     ! M_TX_END;
-		syncidle_in_ack ? M_TX_END;
+		syncidle_in_ack ? M_TX_END
 	:: syncidle_up ? M_REQUEST_UPDATE -> // call
 		syncidle_in     ! M_INTERRUPT_NO_TX;
 		syncidle_in_ack ? M_INTERRUPT_NO_TX;
@@ -139,10 +133,12 @@ accept:
 active proctype multiplayer() {
 	do
 	:: true ->
+		printf("multiplayer: nondet request update\n");
 		syncidle_up     ! M_REQUEST_UPDATE;
 		syncidle_up_ack ? M_REQUEST_UPDATE;
 	:: true ->
+		printf("multiplayer: nondet no update\n");
 		true
-progress:
+accept:
 	od
 }
