@@ -1,10 +1,7 @@
 // Ma_Sys.ma Erlang NCurses Music Player Client
 // Promela Modle for [NO]IDLE verification - 2024 Ma_Sys.ma <info@masysma.net>
 
-// TODO ASTAT THIS IS A BASIC MODEL. NOW TRY IT OUT AND SEE HOW IT GOES...
-//      ONCE ITS UP AND RUNNING CONSIDER DEFINING THE LIVENESS PROPERTY
-
-// spin -run -f idle_crash.pml
+// spin -run [-i] -f idle_crash.pml
 // spin -s -r -replay idle_crash.pml
 // alt. spin -t -p idle_crash.pml
 
@@ -90,7 +87,6 @@ active proctype mpd() {
 		is_idle = false;
 		syncidle_in ! M_MPD_IDLE;
 	:: syncidle_down ? M_IDLE_ENTER ->
-		syncidle_in       ! M_MPD_IDLE; // TODO ORDER?
 		is_idle = true;
 		syncidle_down_ack ! M_IDLE_ENTER;
 	:: syncidle_down ? M_ERLMPD_NOIDLE ->
