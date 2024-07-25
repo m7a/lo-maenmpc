@@ -2,15 +2,15 @@
 // Promela Modle for [NO]IDLE verification - 2024 Ma_Sys.ma <info@masysma.net>
 
 // https://spinroot.com/spin/Man/Quick.html
-// spin -run [-i] -f idle_crash.pml
-// spin -s -r -replay idle_crash.pml
-// spin -run -a -i idle_crash.pml
-// spin -s -r -replay idle_crash.pml
-// spin -run -f -q -a -i idle_crash.pml
-// spin -q -s -r -replay idle_crash.pml
-// alt. spin -t -p idle_crash.pml
+// # spin -q -s -r -replay idle_crash.pml
+// # spin -t -p idle_crash.pml
 
-#define QUEUESIZE 1
+// spin -run -a -i idle_crash.pml
+// spin -DUSE_WIGGLE -run -i -a idle_crash.pml
+// spin -s -r -replay idle_crash.pml
+
+#define QUEUESIZE    1
+#define WIGGLE_SPACE 3
 
 mtype = {
 	// syncidle states
@@ -23,8 +23,6 @@ mtype = {
 	M_REQU
 }
 
-bool is_idle = true;
-
 chan syncidle_down     = [QUEUESIZE] of {mtype}; // down -> maenmpc_mpd
 chan syncidle_down_ack = [1]         of {mtype}; //      <- maenmpc_mpd
 chan syncidle_in       = [QUEUESIZE] of {mtype}; //      <- maenmpc_singleplayer
@@ -33,6 +31,15 @@ chan syncidle_up       = [QUEUESIZE] of {mtype}; // up   -> maenmpc_singleplayer
 chan syncidle_up_ack   = [1]         of {mtype};
 
 mtype state = S_IDLE;
+
+#ifdef USE_WIGGLE
+byte wiggle_tx     = 0;
+byte wiggle_update = 0;
+byte wiggle_shit   = 0;
+byte const_tx;
+byte const_update;
+byte const_shit;
+#endif
 
 active proctype syncidle() {
 end:
@@ -87,6 +94,7 @@ end:
 }
 
 active proctype mpd() {
+	bool is_idle = true;
 end:
 	do
 	// syncidle_down ? M_MIDLE does not exist in the simulation in
@@ -115,11 +123,15 @@ end:
 		// this is intended to provide the emulation mpd_server_emul
 		// completely?
 		:: is_idle ->
-			printf("mpd: nondet leave idle\n");
+			printf("mpd: n leave idle\n");
 			is_idle = false;
 			syncidle_in ! M_MIDLE
+
 		:: true ->
-			printf("mpd: nondet stay put\n");
+			printf("mpd: n stay put\n");
+#ifdef USE_WIGGLE
+			wiggle_shit = (wiggle_shit + 1) % WIGGLE_SPACE
+#endif
 		fi
 	od
 }
@@ -130,9 +142,13 @@ end:
 	:: syncidle_up ? M_MIDLE -> // cast
 		syncidle_in     ! M_TX_BEGIN;
 		syncidle_in_ack ? M_TX_BEGIN;
-		printf("singleplayer: working on tx\n");
+		printf("singleplayer: tx\n");
+#ifdef USE_WIGGLE
+		wiggle_tx = (wiggle_tx + 1) % WIGGLE_SPACE;
+#endif
 		syncidle_in     ! M_TX_END;
 		syncidle_in_ack ? M_TX_END
+
 	:: syncidle_up ? M_REQU -> // call
 		syncidle_in     ! M_INT_NTX;
 		syncidle_in_ack ? M_INT_NTX;
@@ -144,17 +160,44 @@ active proctype multiplayer() {
 end:
 	do
 	:: true ->
-		printf("multiplayer: nondet request update\n");
+		printf("mul: n req upd\n");
 		syncidle_up     ! M_REQU;
 		syncidle_up_ack ? M_REQU;
+#ifdef USE_WIGGLE
+		wiggle_update = (wiggle_update + 1) % WIGGLE_SPACE;
+#endif
+		true
+
 	:: true ->
-		printf("multiplayer: nondet no update\n");
+		printf("mul: n no upd\n");
+#ifdef USE_WIGGLE
+		wiggle_shit = (wiggle_shit + 1) % WIGGLE_SPACE;
+#endif
+		true
 	od
 }
 
-// [] eq always, <> eq eventually
+init {
+#ifdef USE_WIGGLE
+	select(const_tx:     0 .. WIGGLE_SPACE-1);
+	select(const_update: 0 .. WIGGLE_SPACE-1);
+	select(const_shit:   0 .. WIGGLE_SPACE-1);
+#endif
+	true
+}
+
+// G/[]/always, F/<>/eventually
+
 // counterexample goes like “request update all of the time”
 // (not very interesting)
 //ltl back_to_idle {
 //	always ((state != S_IDLE) -> (eventually (state == S_IDLE)))
 //}
+
+#ifdef USE_WIGGLE
+ltl cannot_end_up_const {
+	! (eventually (always  (wiggle_tx     == const_tx &&
+				wiggle_update == const_update &&
+				wiggle_shit   == const_shit)))
+}
+#endif
