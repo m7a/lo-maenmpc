@@ -23,18 +23,13 @@ is_online(Name) ->
 	gen_statem:call(Name, is_online).
 
 run_transaction(Name, Callback) ->
-	error_logger:info_msg("maenmpc_sync_idle tx ~p", [Name]),
 	{ok, Connection, NotifyCompletionTo} = gen_statem:call(Name, tx_begin),
 	Ret = Callback(Connection),
 	ok = gen_statem:call(Name, {tx_end, NotifyCompletionTo}),
-	error_logger:info_msg("maenmpc_sync_idle end tx ~p", [Name]),
 	Ret.
 
 interrupt_no_tx(Name) ->
-	error_logger:info_msg("maenmpc_sync_idle interrupt_no_tx ~p", [Name]),
-	RV = gen_statem:call(Name, interrupt_no_tx),
-	error_logger:info_msg("maenmpc_sync_idle end interrupt_no_tx ~p (RV=~p)", [Name, RV]),
-	RV.
+	gen_statem:call(Name, interrupt_no_tx).
 
 % -- begin state machine --
 
@@ -45,18 +40,15 @@ handle_event(cast, Msg={mpd_assign_error, _Name, _Reason}, init, Ctx) ->
 	{next_state, offline, Ctx};
 
 handle_event(cast, {mpd_idle, Name, Result, FromMPD}, idle, Ctx) ->
-	error_logger:info_msg("  mpd_idle[idle] keep_state ~p", [Name]),
 	gen_server:cast(Ctx#syncidle.up, {mpd_idle, Name, Result}),
 	ok = gen_server:call(FromMPD, mpd_idle_enter),
 	{keep_state, Ctx};
 handle_event(cast, {mpd_idle, Name, Result, FromMPD}, interrupted, Ctx) ->
-	error_logger:info_msg("  mpd_idle[interrupted] next_state ~p", [Name]),
 	gen_server:cast(Ctx#syncidle.up, {mpd_idle, Name, Result}),
 	ok = gen_server:call(FromMPD, mpd_idle_enter),
 	{next_state, idle, Ctx};
-handle_event(cast, {mpd_idle, Name, _Result, FromMPD}, tx_pre,
+handle_event(cast, {mpd_idle, _Name, _Result, FromMPD}, tx_pre,
 					Ctx = #syncidle{conn=Conn, tx=TX}) ->
-	error_logger:info_msg("  mpd_idle[tx_pre] next_state ~p", [Name]),
 	% complete reply delayed from tx_begin
 	ok = gen_statem:reply(TX, {ok, Conn, FromMPD}),
 	{next_state, tx_processing, Ctx#syncidle{tx=none}};
@@ -68,27 +60,21 @@ handle_event(cast, {mpd_idle, Name, _Result, FromMPD}, tx_pre,
 % meantime. There seems to be little we can do about it, though.
 handle_event({call, FromUp}, interrupt_no_tx, idle,
 					Ctx = #syncidle{conn=Conn}) ->
-	error_logger:info_msg("  call interrupt_no_tx"),
-	IRV = erlmpd:noidle(Conn),
-	error_logger:info_msg("  noidle complete (IRV=~p)", [IRV]),
+	erlmpd:noidle(Conn),
 	{next_state, interrupted, Ctx, [{reply, FromUp, ok}]};
 
 handle_event({call, FromTX}, tx_begin, idle, Ctx = #syncidle{conn=Conn}) ->
-	error_logger:info_msg("  call tx_begin[idle] delay reply"),
-	IRV2 = erlmpd:noidle(Conn),
-	error_logger:info_msg("  noidle complete (IRV2=~p)", [IRV2]),
+	erlmpd:noidle(Conn),
 	% delay reply!
 	{next_state, tx_pre, Ctx#syncidle{tx=FromTX}, []};
 
 handle_event({call, FromTX}, tx_begin, interrupted, Ctx) ->
-	error_logger:info_msg("  call tx_begin[interrupted] delay reply ???"),
 	% noidle already set upon interrupting, can rely on the idle to return
 	% within the next messages.
 	{next_state, tx_pre, Ctx#syncidle{tx=FromTX}, []};
 
 handle_event({call, FromTX}, {tx_end, NotifyCompletionTo}, tx_processing,
 								Ctx) ->
-	error_logger:info_msg("  call tx_end[tx_processing]"),
 	ok = gen_server:call(NotifyCompletionTo, mpd_idle_enter),
 	{next_state, idle, Ctx, [{reply, FromTX, ok}]};
 

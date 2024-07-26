@@ -20,10 +20,8 @@ init([Parent, Name, Config]) ->
 	end.
 
 idle_enter(State={_Parent, _Name, Conn, S0}) ->
-	error_logger:info_msg("        maenmpc_mpd idle_enter SEND"),
 	ok = erlmpd:idle_send(Conn, [database, playlist, player, mixer, output,
 							options, sticker]),
-	error_logger:info_msg("        maenmpc_mpd idle_enter CAST/S"),
 	gen_server:cast(S0, mpd_idle),
 	State.
 
@@ -33,9 +31,7 @@ handle_call(_Other, _From, State) ->
 	{reply, ok, State}.
 
 handle_cast(mpd_idle, State={Parent, Name, Conn, S0}) ->
-	error_logger:info_msg("        maenmpc_mpd idle RECEIVE"),
 	IdleResult = erlmpd:idle_receive(Conn),
-	error_logger:info_msg("        maenmpc_mpd idle CAST/R"),
 	ok = gen_server:cast(Parent, {mpd_idle, Name, IdleResult, S0}),
 	{noreply, State}.
 
