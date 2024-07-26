@@ -53,13 +53,11 @@ handle_event(cast, {mpd_idle, _Name, _Result, FromMPD}, tx_pre,
 	ok = gen_statem:reply(TX, {ok, Conn, FromMPD}),
 	{next_state, tx_processing, Ctx#syncidle{tx=none}};
 
-% TODO x erlmpd:noidle small problem: It still seems we cannot avoid the
-%        ealready, because just before sending this the idle may have already
-%        returned. In fact, this is documented behavior to occur when an action
-%        was performed that changes the outcome of idle() in the meantime.
-%        It might make sense to store info about ealready return values in a
-%        counter inside the context and then observe whether we might be able
-%        to join some TX to reduce the numbers...
+% erlmpd:noidle small problem: It still seems we cannot avoid the
+% ealready/timeout, because just before sending this the idle may have
+% already returned. In fact, this is documented behavior to occur when an
+% action was performed that changes the outcome of idle() in the
+% meantime. There seems to be little we can do about it, though.
 handle_event({call, FromUp}, interrupt_no_tx, idle,
 					Ctx = #syncidle{conn=Conn}) ->
 	erlmpd:noidle(Conn),
@@ -70,7 +68,6 @@ handle_event({call, FromTX}, tx_begin, idle, Ctx = #syncidle{conn=Conn}) ->
 	% delay reply!
 	{next_state, tx_pre, Ctx#syncidle{tx=FromTX}, []};
 
-% TODO UNDER EVALUATION. IF IT DOES NOT WORK THEN CONSIDER MAKING INTERRUPT_NO_TX() WAIT UNTIL BACK TO IDLE STATE!
 handle_event({call, FromTX}, tx_begin, interrupted, Ctx) ->
 	% noidle already set upon interrupting, can rely on the idle to return
 	% within the next messages.
