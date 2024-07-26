@@ -4,8 +4,8 @@
 // spin -run -DNFAIR=3 -f -i -a idle_crash.pml
 // spin -s -r -replay idle_crash.pml
 
-#define QUEUESIZE    1
-#define WIGGLE_SPACE 5
+#define QUEUESIZE    3
+#define WIGGLE_SPACE 3
 
 mtype = {
 	// syncidle states
@@ -151,13 +151,31 @@ end:
 	od
 }
 
+// Special event generation with a limited number of initial tries to spit
+// out messages very quickly as to check whether this could cause any issues
+// After a few initial messages, slow down and only when everyone else has
+// suspended consider generating another event! Simulates low priority in a
+// channel-compatible way.
 active proctype eventgen() {
+	byte i = 0;
+	do
+	:: i > 2 ->
+		break
+	:: else ->
+		if
+		:: true ->
+			printf("ev M_REQU\n");
+			event_in ! M_REQU;
+			i++
+
+		:: atomic { is_idle && empty(event_in) } ->
+			printf("ev M_MIDLE\n");
+			event_in ! M_MIDLE;
+			i++
+		fi
+	od
 end:
 	do
-	// only when everyone else has suspended consider generating another
-	// event! Simulates low priority in a channel-compatible way.
-	// when disabling this criterion it finds a deadlock but this appears
-	// to only be due to limited queue size i.e. also not a real finding.
 	:: timeout ->
 progress:
 		if
@@ -183,7 +201,7 @@ init {
 //	always ((state != S_IDLE) -> (eventually (state == S_IDLE)))
 //}
 
-//ltl cannot_end_up_const {
-//	! (eventually (always  (wiggle_tx     == const_tx &&
-//				wiggle_update == const_update)))
-//}
+ltl cannot_end_up_const {
+	! (eventually (always  (wiggle_tx     == const_tx &&
+				wiggle_update == const_update)))
+}
