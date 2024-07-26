@@ -1,16 +1,11 @@
 // Ma_Sys.ma Erlang NCurses Music Player Client
 // Promela Modle for [NO]IDLE verification - 2024 Ma_Sys.ma <info@masysma.net>
 
-// https://spinroot.com/spin/Man/Quick.html
-// # spin -q -s -r -replay idle_crash.pml
-// # spin -t -p idle_crash.pml
-
-// spin -run -a -i idle_crash.pml
-// spin -DUSE_WIGGLE -run -i -a idle_crash.pml
+// spin -run -DNFAIR=3 -f -i -a idle_crash.pml
 // spin -s -r -replay idle_crash.pml
 
 #define QUEUESIZE    1
-#define WIGGLE_SPACE 3
+#define WIGGLE_SPACE 5
 
 mtype = {
 	// syncidle states
@@ -18,7 +13,7 @@ mtype = {
 	// syncidle messages in
 	M_MIDLE, M_INT_NTX, M_TX_BEGIN, M_TX_END,
 	// syncidle messages out
-	M_IDLE_ENT, M_ER_NOIDL
+	M_IDLE_ENT, M_ER_NOIDL,
 	// non-syncidle messages
 	M_REQU
 }
@@ -29,17 +24,15 @@ chan syncidle_in       = [QUEUESIZE] of {mtype}; //      <- maenmpc_singleplayer
 chan syncidle_in_ack   = [1]         of {mtype};
 chan syncidle_up       = [QUEUESIZE] of {mtype}; // up   -> maenmpc_singleplayer
 chan syncidle_up_ack   = [1]         of {mtype};
+chan event_in          = [1]         of {mtype};
 
 mtype state = S_IDLE;
+bool is_idle = true;
 
-#ifdef USE_WIGGLE
 byte wiggle_tx     = 0;
 byte wiggle_update = 0;
-byte wiggle_shit   = 0;
 byte const_tx;
 byte const_update;
-byte const_shit;
-#endif
 
 active proctype syncidle() {
 end:
@@ -82,11 +75,13 @@ end:
 			assert(0); // not expected to happen
 		fi
 
-	:: syncidle_in ? M_TX_END ->
+	:: syncidle_in ? M_TX_END -> // call
 		if
 		:: (state == S_TX_PROCESSING) ->
-			syncidle_down ! M_IDLE_ENT
+			syncidle_down     ! M_IDLE_ENT;
+			syncidle_down_ack ? M_IDLE_ENT;
 			state = S_IDLE;
+			syncidle_in_ack ! M_TX_END
 		:: else ->
 			assert(0); // not expected to happen
 		fi
@@ -94,7 +89,6 @@ end:
 }
 
 active proctype mpd() {
-	bool is_idle = true;
 end:
 	do
 	// syncidle_down ? M_MIDLE does not exist in the simulation in
@@ -104,9 +98,10 @@ end:
 		syncidle_down_ack ! M_IDLE_ENT
 	:: syncidle_down ? M_ER_NOIDL ->
 		if
-		:: is_idle ->
+		:: atomic { is_idle ->
 			syncidle_in ! M_MIDLE;
 			is_idle = false;
+		}
 		:: else ->
 			// if already idle, the real MPD would return some sort
 			// of “error” but in erlang implementation we drop such
@@ -114,25 +109,16 @@ end:
 			// call altogether...
 			true
 		fi
-	// For now (`else`) we assert that this only happens while no incoming
-	// messages are ready to process... Use `true` rather than `else` to
-	// always lalow this...
-	:: else ->
+	:: atomic { event_in ? M_MIDLE ->
+		// see above...
 		if
-		// can nondeterministically also decide to leave idle state.
-		// this is intended to provide the emulation mpd_server_emul
-		// completely?
 		:: is_idle ->
-			printf("mpd: n leave idle\n");
 			is_idle = false;
 			syncidle_in ! M_MIDLE
-
-		:: true ->
-			printf("mpd: n stay put\n");
-#ifdef USE_WIGGLE
-			wiggle_shit = (wiggle_shit + 1) % WIGGLE_SPACE
-#endif
+		:: else ->
+			true
 		fi
+	}
 	od
 }
 
@@ -143,9 +129,7 @@ end:
 		syncidle_in     ! M_TX_BEGIN;
 		syncidle_in_ack ? M_TX_BEGIN;
 		printf("singleplayer: tx\n");
-#ifdef USE_WIGGLE
 		wiggle_tx = (wiggle_tx + 1) % WIGGLE_SPACE;
-#endif
 		syncidle_in     ! M_TX_END;
 		syncidle_in_ack ? M_TX_END
 
@@ -159,45 +143,47 @@ end:
 active proctype multiplayer() {
 end:
 	do
-	:: true ->
-		printf("mul: n req upd\n");
+	:: event_in ? M_REQU ->
 		syncidle_up     ! M_REQU;
 		syncidle_up_ack ? M_REQU;
-#ifdef USE_WIGGLE
 		wiggle_update = (wiggle_update + 1) % WIGGLE_SPACE;
-#endif
-		true
-
-	:: true ->
-		printf("mul: n no upd\n");
-#ifdef USE_WIGGLE
-		wiggle_shit = (wiggle_shit + 1) % WIGGLE_SPACE;
-#endif
 		true
 	od
 }
 
+active proctype eventgen() {
+end:
+	do
+	// only when everyone else has suspended consider generating another
+	// event! Simulates low priority in a channel-compatible way.
+	// when disabling this criterion it finds a deadlock but this appears
+	// to only be due to limited queue size i.e. also not a real finding.
+	:: timeout ->
+progress:
+		if
+		:: true ->
+			printf("ev M_REQU\n");
+			event_in ! M_REQU
+		:: atomic { is_idle && empty(event_in) } ->
+			printf("ev M_MIDLE\n");
+			event_in ! M_MIDLE
+		fi
+	od
+}
+
 init {
-#ifdef USE_WIGGLE
 	select(const_tx:     0 .. WIGGLE_SPACE-1);
 	select(const_update: 0 .. WIGGLE_SPACE-1);
-	select(const_shit:   0 .. WIGGLE_SPACE-1);
-#endif
 	true
 }
 
 // G/[]/always, F/<>/eventually
 
-// counterexample goes like “request update all of the time”
-// (not very interesting)
 //ltl back_to_idle {
 //	always ((state != S_IDLE) -> (eventually (state == S_IDLE)))
 //}
 
-#ifdef USE_WIGGLE
-ltl cannot_end_up_const {
-	! (eventually (always  (wiggle_tx     == const_tx &&
-				wiggle_update == const_update &&
-				wiggle_shit   == const_shit)))
-}
-#endif
+//ltl cannot_end_up_const {
+//	! (eventually (always  (wiggle_tx     == const_tx &&
+//				wiggle_update == const_update)))
+//}
