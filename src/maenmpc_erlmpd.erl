@@ -1,5 +1,5 @@
 -module(maenmpc_erlmpd).
--export([connect/1, to_dbsong/3, normalize_key/1, normalize_always/1,
+-export([connect/1, to_dbsong/3, to_key/1, normalize_key/1, normalize_always/1,
 	normalize_strong/1, merge_tuple/2, convert_rating/1, format_rating/1,
 	epsilon_song/1]).
 -include_lib("maenmpc_db.hrl").
@@ -10,7 +10,7 @@ connect(Config) ->
 
 % Idx: What is our player index, Len: how many players are there in total
 to_dbsong(Entry, Idx, Len) ->
-	#dbsong{key          = erlmpd_to_key(Entry),
+	#dbsong{key          = to_key(Entry),
 		uris         = new_tuple(proplists:get_value(file, Entry),
 								Idx, Len),
 		playcount    = -1,
@@ -22,7 +22,7 @@ to_dbsong(Entry, Idx, Len) ->
 							<<>>), Idx, Len),
 		playlist_id  = proplists:get_value('Id', Entry, -1)}.
 
-erlmpd_to_key(Entry) ->
+to_key(Entry) ->
 	{normalize_key(proplists:get_value('Artist',   Entry, <<>>)),
 	 normalize_strong(proplists:get_value('Album', Entry, <<>>)),
 	 normalize_key(proplists:get_value('Title',    Entry, <<>>))}.
