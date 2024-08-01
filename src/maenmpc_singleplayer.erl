@@ -158,12 +158,10 @@ handle_call(query_output, _From, Ctx) ->
 			% no claim on cursor possible
 		}
 	end), Ctx};
-% returns key or none if no matching value found here
-handle_call({search_by_artist, forward, FromKey, Query}, _From, Ctx) ->
+% returns key or `false` if no matching value found here
+handle_call({search_by_artist, Direction, Artist, FromKey, Query}, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
-		{Artist, _SAlbum, _STitle} = FromKey,
-		% artist = Artist and (title contains Query lor
-		%                      album contains Query)
+		% entry match Artist and (title contains Q || album contains Q)
 		Results = [maenmpc_erlmpd:to_key(Ent) || Ent <- erlmpd:search(
 			Conn, {land, [
 				{tagop, artist, eq, Artist},
@@ -172,15 +170,7 @@ handle_call({search_by_artist, forward, FromKey, Query}, _From, Ctx) ->
 					{lnot, {tagop, album, contains, Query}}
 				]}}
 			]})],
-		% TODO ASTAT x assumes output is sorted. ALSO IT SEEMS THIS SHOULD BE POSSIBLE TO SOLVE BY A STANDARD MEANS LIKE searchbiggerthan or something....? Maybe if we use the right operator for a list:search this would work as well. Also, could we somehow “easily” configure this to search forwward/backward depending on call command i.e. search_by_artist, forward/backward, FromKey, Query ?
-		{_, Selected} = lists:foldl(fun(Cmp, {Cont, Val}) ->
-				case Cont of
-				0                    -> {0, Val};
-				1 when Cmp > FromKey -> {0, Cmp};
-				_Other               -> {1, Val}
-				end
-			end, {1, none}, Results),
-		Selected
+		maenmpc_util:directed_search(Direction, FromKey, Results)
 	end), Ctx};
 handle_call({set_output, #dboutput{partition_name=Partition,
 					output_name=OutputName}}, _From, Ctx) ->

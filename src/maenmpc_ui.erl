@@ -785,7 +785,7 @@ leave_input_mode(Ctx) ->
 
 input_mode_enter(Ctx) ->
 	leave_input_mode(case Ctx#view.input_mode of
-	search -> ui_request(Ctx, {ui_search, Ctx#view.page,
+	search -> ui_request(Ctx, {ui_search, forward, Ctx#view.page,
 							Ctx#view.input_string});
 	_Any   -> Ctx
 	end).

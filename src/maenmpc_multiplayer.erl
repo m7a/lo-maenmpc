@@ -121,8 +121,9 @@ handle_cast({radio_log, ID, Info}, Ctx=#mpl{current_radio=Radio}) ->
 				cnt=Radio#dbscroll.cnt ++ [{ID, Info}]},
 	transform_and_send_to_ui(Ctx, NewRadio, NewRadio#dbscroll.user_data),
 	{noreply, Ctx#mpl{current_radio=NewRadio}};
-handle_cast({ui_search, Page, String}, Ctx) ->
-	{noreply, search(Ctx#mpl{search_page=Page, search_term=String})};
+handle_cast({ui_search, Direction, Page, String}, Ctx) ->
+	{noreply, search(Direction,
+			Ctx#mpl{search_page=Page, search_term=String})};
 handle_cast(_Cast, Ctx) ->
 	{noreply, Ctx}.
 
@@ -739,23 +740,61 @@ ui_horizontal_nav(output, Delta, Ctx = #mpl{outputs=OutputCTX}) ->
 ui_horizontal_nav(_Other, _Delta, Ctx) ->
 	Ctx.
 
-search(Ctx=#mpl{search_page=list, search_term=Query, current_list=#dbscroll{
-			cnt=Cnt, csel=CSel, user_data={Artists, _B, _C}}}) ->
-	CurrentKey = case CSel < 0 orelse CSel >= length(Cnt) of
+search(Direction, Ctx=#mpl{search_page=list, search_term=Query, current_list=
+		#dbscroll{cnt=Cnt, csel=CSel, user_data={Artists, _B, _C}}}) ->
+	ArtistsNoCount = [Artist || {Artist, _Count} <- Artists],
+	StartKey = case CSel < 0 orelse CSel >= length(Cnt) of
 			true ->
-				[{Artist, _Count}|_T] = Artists,
-				{Artist, "", ""};
+				[H|_T] = ArtistsNoCount,
+				{H, <<>>, <<>>};
 			false ->
 				Item = lists:nth(CSel + 1, Cnt),
 				Item#dbsong.key
 			end,
-	Results = [call_singleplayer(Name,
-			{search_by_artist, forward, CurrentKey, Query}) ||
-			Name <- get_active_players(Ctx)],
-	% TODO SUB MERGE TOGETHER | IF AT LEAST ONE RESULT JUMP TO IT. IF NOT CONTINUE W NEXT ARTIST RECURSIVELY!
-	error_logger:info_msg("results = ~p", [Results]);
-search(Ctx) ->
+	Key = search_next_key_from_key(Direction, element(1, StartKey),
+		StartKey, Query, ArtistsNoCount, get_active_players(Ctx)),
+	error_logger:info_msg("key = ~p", [Key]),
+	% TODO GOTO SPECIFIED KEY (IS DEPENDENT ON WHETER WE HAVE LOADED IT ALREADY OR NOT - SPECIAL OPERATION)
+	Ctx;
+search(_Direction, Ctx) ->
 	Ctx.
+
+% TODO TERMINATION IN EVENT THAT NO KEY MATCHES!? ALSO WRAP AROUND SEMANTICS! ALSO WHAT IF ARTIST MATCHES! / NEED TO REVISE THIS (AND THE CALLED FUNCTION) BECAUSE WHILE IT IS A GOOD IDEA IN THE RIGHT DIRECTION IT CANNOT WORK AS-IS RIGHT NOW. SEE INNER COMMENTS
+search_next_key_from_key(Direction, CurrentArtist, StartKey, Query,
+					ArtistsNoCount, ActivePlayers) ->
+	Results = [{call_singleplayer(Name, {search_by_artist, Direction,
+					CurrentArtist, StartKey, Query}), Name}
+					|| Name <- ActivePlayers],
+	case lists:all(fun({Key, _Name}) -> Key =:= false end, Results) of
+	true ->
+		% no results were identified in the search, recurse...
+
+		% if no “next artist” found in search direction wrap around
+		% TODO PROBLEM ONCE THE WRAP AROUND IS ACTIVE WE MUST DROP ALL FAITH IN THE “StartKey” for search purposes and instead accept the first result in search direction. It is also effectively required (but accounted for by the implementation) to traverse the initial artist another time but this time without concern for “StartKey”. If we have done this search before and had the cursor at the search result it will jump to our very position again. Also, this way, we are able to jump to entries which are within the same start artist but some n entries upwards (within the same artist). In summary it seems like we shoudl be able to maintain a “wraparound” marker and have that cause StartKey to be passed as null to subfunction. Note that inside there, a very similar logic to the one here needs to be devised. Maybe we can develop a “directed_serach with wraparound” which accounts for this as well?
+		NextArtist = case maenmpc_util:directed_search(Direction,
+					CurrentArtist, ArtistsNoCount) of
+			false when Direction =:= forward ->
+				[A0|_AR] = ArtistsNoCount,
+				A0;
+			false when Direction =:= backward ->
+				lists:last(ArtistsNoCount);
+			Artist ->
+				Artist
+			end,
+		% If selected next artist matches what we saw before we have
+		% fruitlessly traversed all artists/because StartKey is always
+		% searched first (before recursion occurs) we know that we
+		% have reached the end...
+		case NextArtist =:= element(1, StartKey) of
+		true  -> false;
+		false -> search_next_key_from_key(Direction, NextArtist,
+				StartKey, Query, ArtistsNoCount, ActivePlayers)
+		end;
+	false ->
+		% at least one element is OK, return result
+		[H|_Rem] = lists:sort(Results),
+		H
+	end.
 
 handle_info(interrupt_idle, Ctx) ->
 	call_singleplayer(Ctx#mpl.mpd_active, request_update),
