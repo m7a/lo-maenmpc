@@ -2,6 +2,7 @@
 -behavior(gen_server).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
 -include_lib("maenmpc_db.hrl").
+-define(ARTIST_QUERY_CHUNK_SIZE, 20).
 
 -record(mpl, {
 	ui, radio, alsa, mpd_list, mpd_active, mpd_ratings,
@@ -122,8 +123,8 @@ handle_cast({radio_log, ID, Info}, Ctx=#mpl{current_radio=Radio}) ->
 	transform_and_send_to_ui(Ctx, NewRadio, NewRadio#dbscroll.user_data),
 	{noreply, Ctx#mpl{current_radio=NewRadio}};
 handle_cast({ui_search, Direction, Page, String}, Ctx) ->
-	{noreply, search(Direction,
-			Ctx#mpl{search_page=Page, search_term=String})};
+	{noreply, search(Direction, Ctx#mpl{search_page=Page,
+					search_term=string:lowercase(String)})};
 handle_cast(_Cast, Ctx) ->
 	{noreply, Ctx}.
 
@@ -738,69 +739,140 @@ ui_horizontal_nav(_Other, _Delta, Ctx) ->
 	Ctx.
 
 search(Direction, Ctx=#mpl{search_page=list, search_term=Query, current_list=
-		#dbscroll{cnt=Cnt, csel=CSel, user_data={Artists, _B, _C}}}) ->
-	ArtistsNoCount = [Artist || {Artist, _Count} <- Artists],
-	{StartArtist, StartKey} = case CSel < 0 orelse CSel >= length(Cnt) of
-			true ->
-				[H|_T] = ArtistsNoCount,
-				{H, none};
-			false ->
-				Item = lists:nth(CSel + 1, Cnt),
-				{element(1, Item#dbsong.key), Item#dbsong.key}
-			end,
-
-	% StartArtist included in list ABeforeExclRev as first item
-	{ABeforeExclRev, AAfterIncl} = divide_list_by_pred_r1(
-		fun(Artist) -> Artist =:= StartArtist end, ArtistsNoCount),
-	% Result list always includes StartArtist as first and last item
-	% First time it is traversed respecting the start key and second
-	% time it is traversed to see if there are _any_ results for it
-	% (including such which are before the start key in search direction)
-	ArtistsToCheck = case Direction of
-		forward  -> [StartArtist|AAfterIncl ++
-						lists:reverse(ABeforeExclRev)];
-		backward -> ABeforeExclRev ++
-					lists:reverse([StartArtist|AAfterIncl])
-		end,
-	case search_next_key_from_key(Direction, ArtistsToCheck, StartKey,
-					Query, get_active_players(Ctx)) of
+					#dbscroll{cnt=Cnt, csel=CSel}}) ->
+	case CSel < 0 orelse CSel >= length(Cnt) of
+	true ->
+		% No start key
+		search_list_outside(Direction, Ctx);
 	false ->
-		% No results found, may print something to the status line but
-		% effectively this means no change
-		gen_server:cast(Ctx#mpl.ui, {db_info, "no more results"}),
-		Ctx;
-	Key ->
-		search_list_goto_key(Key, Ctx)
+		Item = lists:nth(CSel + 1, Cnt),
+		StartKey = Item#dbsong.key,
+		{LBeforeExclRev, [_Skip|LAfterExcl]} = divide_list_by_pred_r1(
+				fun(#dbsong{key=K}) -> K =:= StartKey end,
+				Cnt),
+		case
+			case Direction of
+			 1 -> search_cnt(Direction, LAfterExcl, Query,
+								CSel + 1);
+			-1 -> search_cnt(Direction, LBeforeExclRev, Query,
+								CSel - 1)
+			end
+		of
+		false ->
+			case search_list_outside(Direction, Ctx) of
+			false ->
+				case
+					case Direction of
+					 1 -> search_cnt(Direction,
+						lists:reverse(LBeforeExclRev),
+						Query, 0);
+					-1 -> search_cnt(Direction,
+						lists:reverse(LAfterExcl),
+						Query, length(Cnt) - 1)
+					end
+				of
+				false ->
+					gen_server:cast(Ctx#mpl.ui, {db_info,
+							"no more results"}),
+					Ctx;
+				ThirdResult ->
+					search_cnt_scroll_to(ThirdResult, Ctx)
+				end;
+			SecondResult ->
+				search_list_goto_key(SecondResult, Ctx)
+			end;
+		FirstResult ->
+			search_cnt_scroll_to(FirstResult, Ctx)
+		end
 	end;
 search(_Direction, Ctx) ->
 	Ctx.
 
-% TODO REVISE/PARTIALLY REWRITE SERACH FUNCTION SEE SINGLEPLAYER NOTES
-search_next_key_from_key(_Direction, [], _Key, _Query, _ActivePlayers) -> false;
-search_next_key_from_key(Direction, [CurrentArtist|OtherArtists], SearchKey,
-						Query, ActivePlayers) ->
-	Results = [call_singleplayer(Name, {search_by_artist, Direction,
-				CurrentArtist, SearchKey, Query}) ||
-				Name <- ActivePlayers],
-	% filter-out all false values by matching {value, Value} results...
-	case [Value || {value, Value} <- Results] of
-	[] ->
-		% no results were identified in the search, recurse...
-		search_next_key_from_key(Direction, OtherArtists, none, Query,
+search_cnt(_Direction, [], _Query, _Ctr) -> false;
+search_cnt(Direction, [Item|CRem], Query, Ctr) ->
+	case item_matches_query(Item, Query) of
+	true  -> Ctr;
+	false -> search_cnt(Direction, CRem, Query, Ctr + Direction)
+	end.
+
+item_matches_query(#dbsong{key={Artist, Album, Title}}, Query) ->
+	string:find(string:lowercase(Artist), Query) =/= nomatch orelse
+	case Title of
+	album  -> string:find(string:lowercase(Album), Query) =/= nomatch;
+	_Title -> string:find(string:lowercase(Title), Query) =/= nomatch
+	end.
+
+search_list_outside(Direction, Ctx=#mpl{search_term=Query, current_list=
+			#dbscroll{user_data={_Artists, ABeforeRev, AAfter}}}) ->
+	% TODO MISSING FEATURE SEARCH BY ALBUM NAME AS WELL! (ONLY GOTO HEAD OF ALBUM AFTERWARDS SKIP OVER THE SONGS OR SOMETHING... NEED TO SEE HOW EXACTLY THIS CAN BE DONE)
+	ActivePlayers = get_active_players(Ctx),
+	List1 = case Direction of
+		1  -> AAfter;
+		-1 -> ABeforeRev
+		end,
+	case search_next_outside(Direction, List1, Query,
+							ActivePlayers) of
+	false ->
+		List2 = lists:reverse(case Direction of
+			1  -> ABeforeRev;
+			-1 -> AAfter
+			end),
+		search_next_outside(Direction, List2, Query,
 							ActivePlayers);
+	SecondResultA ->
+		SecondResultA
+	end.
+
+search_next_outside(_Direction, [], _Query, _ActivePlayers) ->
+	false;
+% Limit number of artists to query at once (avoid sending overly large queries
+% to MPD)
+search_next_outside(Direction, Artists, Query, ActivePlayers)
+			when length(Artists) > ?ARTIST_QUERY_CHUNK_SIZE ->
+	case search_next_outside(Direction, lists:sublist(Artists,
+			?ARTIST_QUERY_CHUNK_SIZE), Query, ActivePlayers) of
+	false  -> search_next_outside(Direction, lists:sublist(Artists,
+			?ARTIST_QUERY_CHUNK_SIZE, length(Artists)),
+			Query, ActivePlayers);
+	Result -> Result
+	end;
+search_next_outside(Direction, Artists, Query, ActivePlayers) ->
+	Results = [call_singleplayer(Name, {search_by_artists, Direction,
+				[Artist || {Artist, _Songs} <- Artists], Query})
+				|| Name <- ActivePlayers],
+	case [Value || Value <- Results, Value =/= false] of
+	[] ->
+		false;
 	FRS ->
-		% at least one element is OK, return result
-		case lists:sort(FRS) of
-		[H|_T] when Direction =:= forward  -> H;
-		Srt    when Direction =:= backward -> lists:last(Srt)
+		% TODO x NOT EXACTLY CORRECT BECAUSE WE SHOULD COMPARE DISC NUMBER BEFORE TRACK NUMBER (NEED TO GET IT FIRST...)
+		case lists:sort(fun(
+			#dbsong{key={AArtist, AAlbum, ASong}, trackno=ATN},
+			#dbsong{key={BArtist, BAlbum, BSong}, trackno=BTN}) ->
+				AArtist =< BArtist orelse
+				AAlbum  =< BAlbum  orelse
+				ATN     =< BTN     orelse
+				ASong   =< BSong
+			end, FRS)
+		of
+		[H|_T] when Direction =:= 1 ->
+			H#dbsong.key;
+		SRT when Direction =:= -1 ->
+			EL = lists:last(SRT),
+			EL#dbsong.key
 		end
 	end.
+
+search_cnt_scroll_to(CntResult, Ctx=#mpl{current_list=List}) ->
+	ItemsRequested = List#dbscroll.last_query_len,
+	ui_query(Ctx, List#dbscroll{
+		csel    = CntResult,
+		coffset = max(0, CntResult - ItemsRequested div 2)
+	}).
 
 % similar, but non-equal to ui_scroll/Ctx, bottom, List = #dbscroll/type=list...
 search_list_goto_key(Key, Ctx = #mpl{current_list = List}) ->
 	ItemsRequested    = List#dbscroll.last_query_len,
 	{Artists, _B, _C} = List#dbscroll.user_data,
-	error_logger:info_msg("key = ~p", [Key]), % TODO DEBUG ONLY
 	{ABeforeExclRev, AAfterIncl} = divide_list_by_pred_r1(
 		fun({Name, _Songs}) -> Name =:= element(1, Key) end, Artists),
 	{ASelInterleaved, _ABefRevInterleaved, _NRem} = assemble_artists(
