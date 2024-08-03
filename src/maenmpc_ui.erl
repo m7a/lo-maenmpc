@@ -245,6 +245,8 @@ handle_cast({db_cidx, CIDX}, Ctx) ->
 	{noreply, wnd_static_draw(Ctx#view{cidx=CIDX})};
 handle_cast({db_error, Info}, Ctx) ->
 	{noreply, display_error(Ctx, io_lib:format("DB error: ~w", [Info]))};
+handle_cast({db_info, Message}, Ctx) ->
+	{noreply, display_message(Ctx, Message)};
 handle_cast({db_playing, SongAndStatus}, Ctx) ->
 	{noreply, case proplists:get_value(error, SongAndStatus) of
 		undefined -> draw_song_and_status(Ctx, SongAndStatus);
@@ -471,10 +473,16 @@ status_flag(BVal, Flag) ->
 	end.
 
 display_error(Ctx, Error) ->
+	display_colorized(Ctx, ?ceCOLOR_PAIR(?CPAIR_ERROR), Error).
+
+display_message(Ctx, Message) ->
+	display_colorized(Ctx, ?ceCOLOR_PAIR(?CPAIR_DEFAULT), Message).
+
+display_colorized(Ctx, Atts, Message) ->
 	cecho:werase(Ctx#view.wnd_status),
-	cecho:attron(Ctx#view.wnd_status, ?ceCOLOR_PAIR(?CPAIR_ERROR)),
-	cecho:mvwaddstr(Ctx#view.wnd_status, 0, 0, Error),
-	cecho:attroff(Ctx#view.wnd_status, ?ceCOLOR_PAIR(?CPAIR_ERROR)),
+	cecho:attron(Ctx#view.wnd_status, Atts),
+	cecho:mvwaddstr(Ctx#view.wnd_status, 0, 0, Message),
+	cecho:attroff(Ctx#view.wnd_status, Atts),
 	cecho:wrefresh(Ctx#view.wnd_status),
 	Ctx.
 

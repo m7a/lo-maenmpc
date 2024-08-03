@@ -139,11 +139,8 @@ complete_song_info(Name, SongInfo, Ctx) ->
 	% Race condition when player dies after this test, but there does not
 	% seem to be a real way around this issue in general.
 	false -> case call_singleplayer(Name, is_online) of
-		true ->
-			[H|_T] = complete_song_info_other(Name, [SongInfo]),
-			H;
-		false ->
-			SongInfo
+		true  -> [H|_T] = complete_song_info_other(Name, [SongInfo]), H;
+		false -> SongInfo
 		end
 	end.
 
@@ -743,57 +740,122 @@ ui_horizontal_nav(_Other, _Delta, Ctx) ->
 search(Direction, Ctx=#mpl{search_page=list, search_term=Query, current_list=
 		#dbscroll{cnt=Cnt, csel=CSel, user_data={Artists, _B, _C}}}) ->
 	ArtistsNoCount = [Artist || {Artist, _Count} <- Artists],
-	StartKey = case CSel < 0 orelse CSel >= length(Cnt) of
+	{StartArtist, StartKey} = case CSel < 0 orelse CSel >= length(Cnt) of
 			true ->
 				[H|_T] = ArtistsNoCount,
-				{H, <<>>, <<>>};
+				{H, none};
 			false ->
 				Item = lists:nth(CSel + 1, Cnt),
-				Item#dbsong.key
+				{element(1, Item#dbsong.key), Item#dbsong.key}
 			end,
-	Key = search_next_key_from_key(Direction, element(1, StartKey),
-		StartKey, Query, ArtistsNoCount, get_active_players(Ctx)),
-	error_logger:info_msg("key = ~p", [Key]),
-	% TODO GOTO SPECIFIED KEY (IS DEPENDENT ON WHETER WE HAVE LOADED IT ALREADY OR NOT - SPECIAL OPERATION)
-	Ctx;
+
+	% StartArtist included in list ABeforeExclRev as first item
+	{ABeforeExclRev, AAfterIncl} = divide_list_by_pred_r1(
+		fun(Artist) -> Artist =:= StartArtist end, ArtistsNoCount),
+	% Result list always includes StartArtist as first and last item
+	% First time it is traversed respecting the start key and second
+	% time it is traversed to see if there are _any_ results for it
+	% (including such which are before the start key in search direction)
+	ArtistsToCheck = case Direction of
+		forward  -> [StartArtist|AAfterIncl ++
+						lists:reverse(ABeforeExclRev)];
+		backward -> ABeforeExclRev ++
+					lists:reverse([StartArtist|AAfterIncl])
+		end,
+	case search_next_key_from_key(Direction, ArtistsToCheck, StartKey,
+					Query, get_active_players(Ctx)) of
+	false ->
+		% No results found, may print something to the status line but
+		% effectively this means no change
+		gen_server:cast(Ctx#mpl.ui, {db_info, "no more results"}),
+		Ctx;
+	Key ->
+		search_list_goto_key(Key, Ctx)
+	end;
 search(_Direction, Ctx) ->
 	Ctx.
 
-% TODO TERMINATION IN EVENT THAT NO KEY MATCHES!? ALSO WRAP AROUND SEMANTICS! ALSO WHAT IF ARTIST MATCHES! / NEED TO REVISE THIS (AND THE CALLED FUNCTION) BECAUSE WHILE IT IS A GOOD IDEA IN THE RIGHT DIRECTION IT CANNOT WORK AS-IS RIGHT NOW. SEE INNER COMMENTS
-search_next_key_from_key(Direction, CurrentArtist, StartKey, Query,
-					ArtistsNoCount, ActivePlayers) ->
-	Results = [{call_singleplayer(Name, {search_by_artist, Direction,
-					CurrentArtist, StartKey, Query}), Name}
-					|| Name <- ActivePlayers],
-	case lists:all(fun({Key, _Name}) -> Key =:= false end, Results) of
-	true ->
+% TODO REVISE/PARTIALLY REWRITE SERACH FUNCTION SEE SINGLEPLAYER NOTES
+search_next_key_from_key(_Direction, [], _Key, _Query, _ActivePlayers) -> false;
+search_next_key_from_key(Direction, [CurrentArtist|OtherArtists], SearchKey,
+						Query, ActivePlayers) ->
+	Results = [call_singleplayer(Name, {search_by_artist, Direction,
+				CurrentArtist, SearchKey, Query}) ||
+				Name <- ActivePlayers],
+	% filter-out all false values by matching {value, Value} results...
+	case [Value || {value, Value} <- Results] of
+	[] ->
 		% no results were identified in the search, recurse...
-
-		% if no “next artist” found in search direction wrap around
-		% TODO PROBLEM ONCE THE WRAP AROUND IS ACTIVE WE MUST DROP ALL FAITH IN THE “StartKey” for search purposes and instead accept the first result in search direction. It is also effectively required (but accounted for by the implementation) to traverse the initial artist another time but this time without concern for “StartKey”. If we have done this search before and had the cursor at the search result it will jump to our very position again. Also, this way, we are able to jump to entries which are within the same start artist but some n entries upwards (within the same artist). In summary it seems like we shoudl be able to maintain a “wraparound” marker and have that cause StartKey to be passed as null to subfunction. Note that inside there, a very similar logic to the one here needs to be devised. Maybe we can develop a “directed_serach with wraparound” which accounts for this as well?
-		NextArtist = case maenmpc_util:directed_search(Direction,
-					CurrentArtist, ArtistsNoCount) of
-			false when Direction =:= forward ->
-				[A0|_AR] = ArtistsNoCount,
-				A0;
-			false when Direction =:= backward ->
-				lists:last(ArtistsNoCount);
-			Artist ->
-				Artist
-			end,
-		% If selected next artist matches what we saw before we have
-		% fruitlessly traversed all artists/because StartKey is always
-		% searched first (before recursion occurs) we know that we
-		% have reached the end...
-		case NextArtist =:= element(1, StartKey) of
-		true  -> false;
-		false -> search_next_key_from_key(Direction, NextArtist,
-				StartKey, Query, ArtistsNoCount, ActivePlayers)
-		end;
-	false ->
+		search_next_key_from_key(Direction, OtherArtists, none, Query,
+							ActivePlayers);
+	FRS ->
 		% at least one element is OK, return result
-		[H|_Rem] = lists:sort(Results),
-		H
+		case lists:sort(FRS) of
+		[H|_T] when Direction =:= forward  -> H;
+		Srt    when Direction =:= backward -> lists:last(Srt)
+		end
+	end.
+
+% similar, but non-equal to ui_scroll/Ctx, bottom, List = #dbscroll/type=list...
+search_list_goto_key(Key, Ctx = #mpl{current_list = List}) ->
+	ItemsRequested    = List#dbscroll.last_query_len,
+	{Artists, _B, _C} = List#dbscroll.user_data,
+	error_logger:info_msg("key = ~p", [Key]), % TODO DEBUG ONLY
+	{ABeforeExclRev, AAfterIncl} = divide_list_by_pred_r1(
+		fun({Name, _Songs}) -> Name =:= element(1, Key) end, Artists),
+	{ASelInterleaved, _ABefRevInterleaved, _NRem} = assemble_artists(
+		lists_merge_after_before(ABeforeExclRev, AAfterIncl, []),
+		ItemsRequested * 3, []),
+	case lists:sort(ASelInterleaved) of
+	[] ->
+		gen_server:cast(Ctx#mpl.ui, {db_error, search_miss_1}),
+		Ctx;
+	ASelSRT ->
+		[{AFirstSel, _Songs1}|_ASelRem] = ASelSRT,
+		{ALastSel, _Songs2} = lists:last(ASelSRT),
+		{ABeforeExclRev2, AAfterInclInterm} = divide_list_by_pred_r1(
+				fun({Name, _Songs}) -> Name =:= AFirstSel end,
+				Artists),
+		{_ABeforeRev3, [_ADropLastSel|AAfterExcl3]} =
+				divide_list_by_pred_r1(fun({Name, _Songs}) ->
+				Name =:= ALastSel end, AAfterInclInterm),
+		% continue with ASelSRT, Artists, ABeforeExclRev2, AAfterExcl3
+		NewCnt  = query_list_artists_songs(ASelSRT, Ctx),
+		HaveCnt = length(NewCnt),
+		QOffset = sum_artists(ABeforeExclRev2),
+		case find_index_for_key(NewCnt, Key, 0) of
+		false ->
+			gen_server:cast(Ctx#mpl.ui, {db_error, search_miss_2}),
+			Ctx;
+		CSel ->
+			NewList = query_playcount(Ctx, List#dbscroll{
+				cnt       = NewCnt,
+				coffset   = max(0, CSel - ItemsRequested div 2),
+				csel      = CSel,
+				qoffset   = QOffset,
+				total     = QOffset + HaveCnt +
+						sum_artists(AAfterExcl3),
+				user_data = {Artists, ABeforeExclRev2,
+						AAfterExcl3}
+			}),
+			transform_and_send_to_ui(Ctx, NewList),
+			Ctx#mpl{current_list=NewList}
+		end
+	end.
+
+lists_merge_after_before([], After, Acc) -> lists:reverse(Acc) ++ After;
+lists_merge_after_before(Before, [], Acc) -> lists:reverse(Acc) ++ Before;
+lists_merge_after_before([B|Before], [A|After], Acc) ->
+			lists_merge_after_before(Before, After, [A|[B|Acc]]).
+
+% find the index of the first matching key in the dbsong list passed as args
+% this may become a generically useful function if instead of hard-matching the
+% key we pass a callback function.
+find_index_for_key([], _Key, _Idx) -> false;
+find_index_for_key([H|Tail], Key, Idx) ->
+	case H#dbsong.key =:= Key of
+	true  -> Idx;
+	false -> find_index_for_key(Tail, Key, Idx + 1)
 	end.
 
 handle_info(interrupt_idle, Ctx) ->

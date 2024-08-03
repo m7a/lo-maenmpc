@@ -158,7 +158,8 @@ handle_call(query_output, _From, Ctx) ->
 			% no claim on cursor possible
 		}
 	end), Ctx};
-% returns key or `false` if no matching value found here
+% returns {value, Key} or `false` if no matching value found here
+% Use FromKey = none to take first matching result (respecting search direction)
 handle_call({search_by_artist, Direction, Artist, FromKey, Query}, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
 		% entry match Artist and (title contains Q || album contains Q)
@@ -170,7 +171,8 @@ handle_call({search_by_artist, Direction, Artist, FromKey, Query}, _From, Ctx) -
 					{lnot, {tagop, album, contains, Query}}
 				]}}
 			]})],
-		maenmpc_util:directed_search(Direction, FromKey, Results)
+		% TODO WRONG - WE MUST NOT ASSUME THAT THE OUTPUT LIST IS “SORTED” LEXICOGRAPHICALLY BY KEY BECAUSE IT IS IN FACT SORTED ARTIST/ALBUM/TRACKNO and this is quite a different thing. Suggest to split results list by key and take the appropriate item depending on search direction (or some specialized routine for kase FromKey = none where we can bypass the split and take first (forward) or last (backward) result right away
+		directed_search(Direction, FromKey, Results)
 	end), Ctx};
 handle_call({set_output, #dboutput{partition_name=Partition,
 					output_name=OutputName}}, _From, Ctx) ->
@@ -333,6 +335,49 @@ compute_and_transform_rating(_Ctx, Direction, OldRating) ->
 	OldRating + Delta < 0 orelse OldRating + Delta > 100 -> -1;
 	true -> (OldRating + Delta) div 10
 	end.
+
+% TODO CSTAT EVEN IN THIS COMPLICATED NOTATION IT IS STILL WRONG
+% PROBLEM IS: WHEN WE HAVE A COMPARISON KEY IT CAN BE PART OF THE RESULTS OR NOT
+% ALSO, IT CAN BE SAME ARTIST OR NOT
+% Now assume it's same artist but not part of the results we still must only
+% return results that come afterwards in display order. Now either we encode
+% the display order into the search function or we do something elase entirely
+% like e.g. performing the first part of the search on what the GUI has loaded (CNT list)
+% and only afterwards query the DB but that time without any limits (except for artist for now)
+%   In any case, the search function is also too slow and we must find out how
+% we could fix it...?
+% IMHO the solution is twofold
+%   - solve this start key stuff entirely by searching first in the GUI
+%   - then solve the performance stuff by handling the non-GUI parts without
+%     start key (simplifies because fewer post-processing) but also by querying
+%     multiple artists at once (e.g. how about 30 artists at once?)
+%   - since no special post-processing is needed we could even ask for all
+%     artists in the search direction (that is until the wrap around) at once
+%     (assuming there is no query size limit :smile:) and then limit the number
+%     of results to 1
+%   - GUI order criterion still needs to be enforced to merge the results
+%     together (this is an unrelated bug that is currently present...)
+directed_search(_AnyDirection, _Item, []) ->
+	false;
+directed_search(forward, none, [H|_T]) ->
+	{value, H};
+directed_search(forward, Key, List) ->
+	directed_search_forward(Key, List, List);
+directed_search(backward, none, List) ->
+	{value, lists:last(List)};
+directed_search(backward, Key, List) ->
+	RL = lists:reverse(List),
+	directed_search_forward(Key, RL, RL).
+
+% first iteration exceeded and key not in list -> safe to return first item...
+directed_search_forward(_Key, [H|_T], []) ->
+	{value, H};
+directed_search_forward(Key, _IL, [Key|[]]) ->
+	false;
+directed_search_forward(Key, _IL, [Key|[Next|_T]]) ->
+	{value, Next};
+directed_search_forward(Key, IL, [_H|T]) ->
+	directed_search_forward(Key, IL, T).
 
 handle_cast(Msg={mpd_assign_error, _MPDName, _Reason}, Ctx) ->
 	% bubble-up error
