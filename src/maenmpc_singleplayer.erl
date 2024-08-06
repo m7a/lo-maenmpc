@@ -30,21 +30,6 @@ init(Properties) ->
 	{ok, InitialState#spl{current_song=maenmpc_erlmpd:epsilon_song(
 							InitialState#spl.len)}}.
 
-% TODO CASE database, playlist, output, sticker?
-%handle_idle(database, Context, _Name) ->
-%	% the song database has been modified after update
-%	Context; % TODO
-%handle_idle(playlist, Context, _Name) ->
-%	% the queue (i.e. the current playlist) has been modified
-%	Context; % TODO
-%handle_idle(output, Context) ->
-%	% an audio output has been added, removed or modified
-%	% (e.g. renamed, enabled or disabled)
-%	Context; % TODO
-%handle_idle(sticker, Context) ->
-%	% the sticker database has been modified.
-%	Context; % TODO
-
 handle_call(is_online, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:is_online(Ctx#spl.syncidle), Ctx};
 handle_call(request_update, _From, Ctx) ->
@@ -175,6 +160,8 @@ handle_call({search_by_artists, Direction, Artists, Query}, _From, Ctx) ->
 					}}
 				end,
 				{lnot, {land, [
+					% TODO x search: This is a hack to support searching by artist which does not result in the first matching albumb but rather first matching track becoming selected. it may be OK (although inefficient) this way. To optimize it, check via string matching if an artist may match and if yes bypass searching for their tracks and instead only get a virtual first track result that indicates we want to match an album? (Problem is that we cannot easily process the individual albums here without again sacrificing a lot of performance...
+					{lnot, {tagop, artist, contains, Query}},
 					{lnot, {tagop, title, contains, Query}},
 					{lnot, {tagop, album, contains, Query}}
 				]}}
@@ -244,14 +231,8 @@ handle_call({rating, Direction, Song}, _From, Ctx) when Ctx#spl.is_rating ->
 			maenmpc_erlmpd:convert_rating(NewR)
 		end
 	end), Ctx};
-% TODO ALL OTHER INTERACTIVE FUNCTION STUFF GOES HERE...
 handle_call(_Call, _From, Ctx) ->
 	{reply, ok, Ctx}.
-
-%is_status_subsystem(player)  -> true;  % start stop seek new song, tags changed
-%is_status_subsystem(mixer)   -> true;  % the volume has been changed
-%is_status_subsystem(options) -> true;  % repeat, random, crossfade, replay gain
-%is_status_subsystem(_Other)  -> false.
 
 parse_metadata({error, Descr}, Ctx) ->
 	gen_server:cast(Ctx#spl.db, {mpd_assign_error, unknown, Descr}),

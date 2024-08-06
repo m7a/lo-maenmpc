@@ -16,7 +16,7 @@
 	height, width,
 	wnd_song, wnd_card, wnd_main, wnd_sel, wnd_sel_card, wnd_status,
 	wnd_keys,
-	db, cidx, page, storech,
+	db, cidx, page, storech, search_direction,
 	input_mode, input_string, input_subpos, input_max, input_y, input_x
 }).
 
@@ -29,7 +29,8 @@ init([NotifyToDB]) ->
 	{Height, Width} = cecho:getmaxyx(),
 	{ok, init_windows(#view{height = Height, width = Width,
 			db = NotifyToDB, cidx = 1, page = help, storech = $_,
-			input_mode = none}, "Initializing...")}.
+			search_direction = 0, input_mode = none},
+			"Initializing...")}.
 
 init_color_pairs() ->
 	cecho:init_pair(?CPAIR_DEFAULT,     ?ceCOLOR_WHITE,  ?ceCOLOR_BLACK),
@@ -167,7 +168,7 @@ draw_page_help(Ctx) ->
 		[<<"↓ j  l"/utf8>>,
 		 <<"← -"/utf8>>,      <<"Volume down"/utf8>>,
 		 <<"r"/utf8>>,        <<"repeat"/utf8>>,
-		%<<"CTRL-K/J"/utf8>>, <<"queue:  Move item"/utf8>>
+		%<<"CTRL-K/J"/utf8>>, <<"queue:  Move item"/utf8>> % TODO
 		 [],                  []],
 		[<<"PgUp"/utf8>>,
 		 <<"←- s"/utf8>>,     <<"stop"/utf8>>,
@@ -187,14 +188,14 @@ draw_page_help(Ctx) ->
 		 <<"T"/utf8>>,        <<"radio:  stop radio"/utf8>>],
 		[<<"Tab"/utf8>>,
 		 <<">"/utf8>>,        <<"next"/utf8>>,
-		%<<"p"/utf8>>,        <<"podcasts"/utf8>>,
+		%<<"p"/utf8>>,        <<"podcasts"/utf8>>, % TODO
 		 [],                  [],
 		 [],                  []],
 		[<<"F1..F10"/utf8>>,
 		 <<"<"/utf8>>,        <<"prev"/utf8>>,
-		%<<"Space"/utf8>>,    <<"expand"/utf8>>,
+		%<<"Space"/utf8>>,    <<"expand"/utf8>>, % TODO
 		 [],                  [],
-		 <<"/ ? n p"/utf8>>,  <<"search on screen"/utf8>>]
+		 <<"/ ? n N"/utf8>>,  <<"search on screen"/utf8>>]
 	]),
 	cecho:wrefresh(Ctx#view.wnd_main),
 	Ctx.
@@ -364,14 +365,17 @@ single_key_action(Ctx, Character) ->
 							rating_up});
 	$#               -> ui_request(Ctx, {ui_selected, Ctx#view.page,
 							rating_down});
+	$/               -> ui_search_start(Ctx#view{search_direction=1});
+	$?               -> ui_search_start(Ctx#view{search_direction=-1});
+	$n               -> ui_request(Ctx, {ui_search_continue,
+				Ctx#view.search_direction, Ctx#view.page});
+	$N               -> ui_request(Ctx, {ui_search_continue,
+				-Ctx#view.search_direction, Ctx#view.page});
 	% TODO x undocumented keybindings!
 	$h               -> ui_request(Ctx, {ui_horizontal, Ctx#view.page, -1});
 	$l               -> ui_request(Ctx, {ui_horizontal, Ctx#view.page, +1});
 	?ceKEY_TAB       -> ui_request(Ctx, {ui_horizontal, Ctx#view.page, +1});
-	$/               -> ui_search_start(Ctx);
 	% TODO F5       - search screen
-	% TODO / ? n p  - search on screen
-	% TODO F8       - output selection
 	% TODO p        - podcasts
 	% TODO Space    - expand/contract
 	% TODO CTRL-K/J - move item in playlist
@@ -793,8 +797,8 @@ leave_input_mode(Ctx) ->
 
 input_mode_enter(Ctx) ->
 	leave_input_mode(case Ctx#view.input_mode of
-	search -> ui_request(Ctx, {ui_search, 1, Ctx#view.page,
-							Ctx#view.input_string});
+	search -> ui_request(Ctx, {ui_search, Ctx#view.search_direction,
+					Ctx#view.page, Ctx#view.input_string});
 	_Any   -> Ctx
 	end).
 

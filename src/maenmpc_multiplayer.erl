@@ -7,7 +7,7 @@
 -record(mpl, {
 	ui, radio, alsa, mpd_list, mpd_active, mpd_ratings,
 	maloja, outputs,
-	search_page, search_term, % search_direction
+	search_page, search_term,
 	current_song, current_queue, current_list, current_radio, current_filter
 }).
 
@@ -31,6 +31,7 @@ init([NotifyToUI, NotifyToRadio]) ->
 		mpd_ratings    = PrimaryRatings,
 		maloja         = maenmpc_maloja:conn(Maloja),
 		outputs        = none,
+		search_term    = "",
 		current_song   = maenmpc_erlmpd:epsilon_song(length(MPDList)),
 		current_filter = {lnot, {land, [{tagop, artist, eq, ""},
 						{tagop, album,  eq, ""},
@@ -125,6 +126,9 @@ handle_cast({radio_log, ID, Info}, Ctx=#mpl{current_radio=Radio}) ->
 handle_cast({ui_search, Direction, Page, String}, Ctx) ->
 	{noreply, search(Direction, Ctx#mpl{search_page=Page,
 					search_term=string:lowercase(String)})};
+% TODO x search: Backward search from end of list with an item that is maybe off the scren causes something to be selected outside of the visible area (if at all).
+handle_cast({ui_search_continue, Direction, Page}, Ctx) ->
+	{noreply, search(Direction, Ctx#mpl{search_page=Page})};
 handle_cast(_Cast, Ctx) ->
 	{noreply, Ctx}.
 
@@ -802,9 +806,9 @@ item_matches_query(#dbsong{key={Artist, Album, Title}}, Query) ->
 	_Title -> string:find(string:lowercase(Title), Query) =/= nomatch
 	end.
 
+% TODO x search: With sufficient query length may attain better performance by handing the query in its entirety over to the database and only from the results determine what is “after” and “before” current cursor in search direction. However, this would incur jet another path of the implementation to be tested. Remain with the current (slower) implementation for now.
 search_list_outside(Direction, Ctx=#mpl{search_term=Query, current_list=
 			#dbscroll{user_data={_Artists, ABeforeRev, AAfter}}}) ->
-	% TODO MISSING FEATURE SEARCH BY ALBUM NAME AS WELL! (ONLY GOTO HEAD OF ALBUM AFTERWARDS SKIP OVER THE SONGS OR SOMETHING... NEED TO SEE HOW EXACTLY THIS CAN BE DONE)
 	ActivePlayers = get_active_players(Ctx),
 	List1 = case Direction of
 		1  -> AAfter;
@@ -864,6 +868,7 @@ search_next_outside(Direction, Artists, Query, ActivePlayers) ->
 
 search_cnt_scroll_to(CntResult, Ctx=#mpl{current_list=List}) ->
 	ItemsRequested = List#dbscroll.last_query_len,
+	% TODO SEARCH BUG TRY TO SEARCH FOR “YASHA” AND OBSERVE THE SCREEN NOT BEING FILLED ENTIRELY DESPITE RECOVERING AFTE RISSUING ANY SUBSEQUENT SCROLL OPERATION. NEED TO ENSURE THAT THIS HAPPENS AUTOMATICALLY ALREADY / IT WOULD SEEM THIS IS A BUG IN THE SCROLLING IMPLEMENTATION THAT ONLY TRIGGERS IN THIS CASE HERE?
 	ui_query(Ctx, List#dbscroll{
 		csel    = CntResult,
 		coffset = max(0, CntResult - ItemsRequested div 2)
