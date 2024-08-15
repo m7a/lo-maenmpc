@@ -102,10 +102,11 @@ radio_start(MPDName, Ctx0) when Ctx0#rr.active =:= false ->
 		end, Ctx5, Ctx5#rr.active, UseIdx, Ctx5),
 
 	Ctx7 = log("associate playcounts", Ctx6),
-	Ctx8 = maenmpc_maloja:foldl_scrobbles(fun scrobble_to_playcount/2,
-							Ctx7, Ctx7#rr.maloja),
+	{Ctx8, Skip} = maenmpc_maloja:foldl_scrobbles(
+		fun scrobble_to_playcount/2, {Ctx7, 0}, Ctx7#rr.maloja),
+	Ctx8a = log(io_lib:format("~w playcounts skipped", [Skip]), Ctx8),
 
-	Ctx9 = log("associate ratings", Ctx8),
+	Ctx9 = log("associate ratings", Ctx8a),
 	{ok, ConnRatings} = maenmpc_erlmpd:connect(proplists:get_value(
 				Ctx9#rr.primary_ratings, Ctx9#rr.mpd_list)),
 	RatingsRaw = erlmpd:sticker_find(ConnRatings, "song", "", "rating"),
@@ -165,7 +166,7 @@ foldl_all(Func, Acc, MPD, Idx, Ctx1) ->
 	erlmpd:disconnect(Conn),
 	RV.
 
-scrobble_to_playcount(Scrobble, Ctx) ->
+scrobble_to_playcount(Scrobble, {Ctx, Ctr0}) ->
 	ScrobbleTrack = maps:get(<<"track">>, Scrobble),
 	ScrobbleAlbum = maps:get(<<"album">>, ScrobbleTrack),
 	TitleRaw      = maps:get(<<"title">>, ScrobbleTrack),
@@ -216,11 +217,7 @@ scrobble_to_playcount(Scrobble, Ctx) ->
 			end
 		end
 	end, {0, Ctx}, [{Title, Artist} || Title <- Titles, Artist <- Artists]),
-	case Result of
-	1 -> CtxR;
-	0 -> log(io_lib:format("placounts skipped ~s - ~w",
-					[TitleRaw, ScrobbleTrack]), CtxR)
-	end.
+	{CtxR, Ctr0 + (1 - Result)}.
 
 plsongs_inc(Key) ->
 	ets:update_counter(plsongs, Key, {#dbsong.playcount, 1}),
@@ -258,8 +255,12 @@ radio_enqueue(Ctx=#rr{talk_to=Dest, schedule=[{SongKey, ID}|T]}) ->
 	[Value] = ets:lookup(plsongs, SongKey),
 	gen_server:cast(Dest, {radio_enqueue, Value#dbsong{playlist_id=ID}}),
 	case T of
-	[]    -> schedule_compute(Ctx);
-	_More -> Ctx
+	[] ->
+		Ctx2 = schedule_compute(Ctx),
+		% ensure that next time we recognize to input the next song!
+		Ctx2#rr{schedule=[{SongKey, ID}|Ctx2#rr.schedule]};
+	_More ->
+		Ctx
 	end.
 
 % Compute a Music Schedule according to the following algorithm:
