@@ -642,7 +642,7 @@ current_page_height(Ctx) ->
 
 draw_outputs(Ctx, #dboutputs{outputs=Outputs, partitions=Partitions,
 				active_set=ActiveSet,
-				assigned={APlayerIdx, APartition, AOutputID},
+				assigned={APlayerIdx, APartition},
 				cursor={CPlayerIdx, CPartition, COutputID}}) ->
 	cecho:werase(Ctx#view.wnd_main),
 	WPart = 15,
@@ -682,16 +682,13 @@ draw_outputs(Ctx, #dboutputs{outputs=Outputs, partitions=Partitions,
 		end, CWI, PPartitions)
 	end, 2 + WPart, lists:zip(PartIdx, Partitions)),
 	% draw output lines
-	lists:foreach(fun({DY, #dboutput{player_idx=Player,
-					partition_name=Partition, output_id=ID,
+	lists:foreach(fun({DY, #dboutput{player_idx=Player, output_id=ID,
 					output_name=Name}}) ->
 		Atts0 = idx_sel_to_cpair({Player, std}),
-		Atts  = Atts0 bor bold_if(Player =:= APlayerIdx andalso
-			Partition =:= APartition andalso ID =:= AOutputID),
-		cecho:attron(Ctx#view.wnd_main, Atts),
+		cecho:attron(Ctx#view.wnd_main, Atts0),
 		cecho:mvwaddstr(Ctx#view.wnd_main, DY + 2, 2, utf8pad(WPart - 2,
 									Name)),
-		cecho:attroff(Ctx#view.wnd_main, Atts),
+		cecho:attroff(Ctx#view.wnd_main, Atts0),
 		lists:foldl(fun(PartitionDraw, CW) ->
 			AttsU = case Player =:= CPlayerIdx andalso
 					PartitionDraw =:= CPartition andalso
@@ -699,8 +696,7 @@ draw_outputs(Ctx, #dboutputs{outputs=Outputs, partitions=Partitions,
 				true  -> idx_sel_to_cpair({Player, sel});
 				false -> Atts0
 				end bor bold_if(Player =:= APlayerIdx
-					andalso PartitionDraw =:= APartition
-					andalso ID =:= AOutputID),
+					andalso PartitionDraw =:= APartition),
 			cecho:attron(Ctx#view.wnd_main, AttsU),
 			Symbol = case sets:is_element({Player, PartitionDraw,
 				ID}, ActiveSet) of true -> $x; false -> $o end,

@@ -138,7 +138,8 @@ handle_call(query_output, _From, Ctx) ->
 			partitions = Partitions,
 			active_set = ActiveS,
 			assigned   = case sets:to_list(CandidateAssigned) of
-					[LH|[]] -> LH; _Other -> none
+					[] -> {none, Ctx#spl.mpd_partition};
+					[{Pl, Par, _Out}|_Any] -> {Pl, Par}
 					end
 			% no claim on cursor possible
 		}
@@ -173,17 +174,21 @@ handle_call({search_by_artists, Direction, Artists, Query}, _From, Ctx) ->
 		end
 	end), Ctx};
 handle_call({set_output, #dboutput{partition_name=Partition,
-					output_name=OutputName}}, _From, Ctx) ->
-	maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
+				output_name=OutputName, output_id=OutputID}},
+				_From, Ctx) ->
+	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
 		if
 		Partition =/= Ctx#spl.mpd_partition ->
 			ok = erlmpd:partition(Conn, Partition);
 		true ->
 			true
 		end,
-		erlmpd:moveoutput(Conn, OutputName) % ignore RC
-	end),
-	{reply, ok, Ctx#spl{mpd_partition = Partition}};
+		% ignore RC and always execute moveoutput.
+		% alternatively check whether it is already on the correct
+		% output and only run this command if necessary
+		erlmpd:moveoutput(Conn, OutputName),
+		erlmpd:toggleoutput(Conn, OutputID)
+	end), Ctx#spl{mpd_partition = Partition}};
 handle_call({enqueue_end, Songs}, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
 		lists:foreach(fun(Song) ->

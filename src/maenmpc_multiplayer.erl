@@ -540,7 +540,7 @@ ui_query_outputs(Ctx) ->
 			end
 		end,
 		#dboutputs{outputs=[], partitions=[], active_set=sets:new(),
-								assigned=none},
+							assigned={none, none}},
 		Ctx#mpl.mpd_list
 	),
 	% TODO z Optionally return cursor from before if valid...

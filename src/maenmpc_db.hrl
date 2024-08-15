@@ -29,10 +29,10 @@
 
 -record(dboutput, {player_idx, partition_name, output_id, output_name}).
 % active_set {player idx, partition name, output id} when active!
-% assigned   {player idx, partition name, output id} of the current player state
+% partitions list of binary or list of list of binary depending on
+%            singleplayer/multiplayer view
+% assigned   {player idx, partition name} of the current player state
 %            It can only be known for real by the multiplayer, but singleplayer
 %            can propose a value which is becoming effective if that singleplayer
 %            is the active one.
-% partitions list of binary or list of list of binary depending on
-%            singleplayer/multiplayer view
 -record(dboutputs, {outputs, partitions, active_set, assigned, cursor}).
