@@ -94,6 +94,8 @@ handle_cast(R={ui_simple, _A}, Ctx) ->
 	{noreply, Ctx};
 handle_cast({ui_query, output}, Ctx) ->
 	{noreply, ui_query_outputs(Ctx)};
+handle_cast({ui_query, search_limits}, Ctx) ->
+	{noreply, ui_query_search_limits(Ctx)};
 handle_cast({ui_query, Action, ItemsRequested}, Ctx) ->
 	{noreply, ui_query(Ctx,
 			ui_items_requested(Ctx, Action, ItemsRequested))};
@@ -561,6 +563,28 @@ merge_outputs(DBOI = #dboutputs{outputs=IO, partitions=IP, active_set=AI,
 		active_set = sets:union(AI, AS),
 		assigned   = case IsActive of true -> ASGN; false -> ASI end
 	}.
+
+ui_query_search_limits(Ctx) ->
+	gen_server:cast(Ctx#mpl.ui, {db_search_limits, lists:foldl(
+		fun({Name, _Idx}, Lim) ->
+			case call_singleplayer(Name, is_online) of
+			true  -> merge_searchlim(Lim, call_singleplayer(Name,
+							query_search_limits));
+			false -> Lim
+			end
+		end,
+		#dbsearchlim{year={9999, 0}, rating={100, 0},
+				bitdepth={99, 0}, samplerate={9999999, 0}},
+	Ctx#mpl.mpd_list)}),
+	Ctx.
+
+merge_searchlim(#dbsearchlim{year=YA, rating=RA, bitdepth=BA, samplerate=SA},
+		#dbsearchlim{year=YB, rating=RB, bitdepth=BB, samplerate=SB}) ->
+	#dbsearchlim{year=merge_limits(YA, YB), rating=merge_limits(RA, RB),
+		bitdepth=merge_limits(BA, BB), samplerate=merge_limits(SA, SB)}.
+
+merge_limits({MinA, MaxA}, {MinB, MaxB}) ->
+	{min(MinA, MinB), max(MaxA, MaxB)}.
 
 ui_scroll(Ctx, top, List) ->
 	proc_range_result(Ctx, case List#dbscroll.qoffset =:= 0 of

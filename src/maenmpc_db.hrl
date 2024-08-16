@@ -36,3 +36,6 @@
 %            can propose a value which is becoming effective if that singleplayer
 %            is the active one.
 -record(dboutputs, {outputs, partitions, active_set, assigned, cursor}).
+
+% each of the fields is a 2-tuple with min/max values
+-record(dbsearchlim, {year, rating, bitdepth, samplerate}).

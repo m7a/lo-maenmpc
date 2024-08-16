@@ -144,6 +144,29 @@ handle_call(query_output, _From, Ctx) ->
 			% no claim on cursor possible
 		}
 	end), Ctx};
+% TODO ASTAT
+% 5> {ok, Conn2} = erlmpd:connect("172.17.0.1", 6600), erlmpd:command(Conn2, "list date").
+% ["Date: ","Date: 1979","Date: 1981","Date: 1983",
+%  "Date: 1984","Date: 1986","Date: 1987","Date: 1988",
+%  "Date: 1989","Date: 1990","Date: 1991","Date: 1992",
+%  "Date: 1993","Date: 1994","Date: 1995","Date: 1996",
+%  "Date: 1997","Date: 1998","Date: 1999","Date: 2000",
+%  "Date: 2001","Date: 2002","Date: 2003","Date: 2004",
+%  "Date: 2005","Date: 2005-09-27","Date: 2006","Date: 2007",
+%  [...]|...]
+% no way to query audio format (may need a DB of all valid formats and then
+%  ask the DB if it has matches for the respective formats...?)
+% no way to query for unique sticker values for given key
+% -> right now, it seems we could only query info for date....
+%  indeed look at https://github.com/MusicPlayerDaemon/MPD/issues/1104
+%  Its possible to implement a binary search that queries if sticker value < 2048
+%  exists. No? then maybe < 1024? etc.
+handle_call(query_search_limits, _From, Ctx) ->
+	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
+		% TODO ... list date
+		#dbsearchlim{year={1999, 2004}, rating={0, 100},
+				bitdepth={16, 24}, samplerate={44100, 96000}}
+	end), Ctx};
 % returns Item or `false` if no matching value found here
 handle_call({search_by_artists, Direction, Artists, Query}, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->

@@ -98,10 +98,10 @@ wnd_static_draw(Ctx) ->
 		cecho:waddstr(Ctx#view.wnd_keys, io_lib:format("~-6s", [Msg])),
 		cecho:attroff(Ctx#view.wnd_keys, Atts)
 	end, [
-		% Planned assignments: {3, "Tree"}, {5, "Search"}, {7, "Info"}
-		{1, "Help"}, {2, "Queue"}, {3, ""}, {4, "List"},
-		{5, ""},     {6, "Radio"}, {7, ""}, {8, "Output"},
-		{9, ""},     {0, "Quit"}
+		% Planned assignments: {3, "Tree"}, {7, "Info"}
+		{1, "Help"},   {2, "Queue"}, {3, ""}, {4, "List"},
+		{5, "Search"}, {6, "Radio"}, {7, ""}, {8, "Output"},
+		{9, ""},       {0, "Quit"}
 	]),
 	cecho:wrefresh(Ctx#view.wnd_keys),
 	case Ctx#view.page =:= help of
@@ -317,6 +317,8 @@ priority_action(Ctx, Character) ->
 				{ui_query, queue, main_height(Ctx)-1})};
 	?ceKEY_F(4)   -> {SSSO, ui_request(Ctx#view{page=list},
 				{ui_query, list,  main_height(Ctx)})};
+	?ceKEY_F(5)   -> {stop, ui_request(Ctx#view{page=search},
+				{ui_query, search_limits})};
 	?ceKEY_F(6)   -> {SSSO, ui_request(Ctx#view{page=radio},
 				{ui_query, radio, main_height(Ctx)})};
 	?ceKEY_F(8)   -> {stop, ui_request(Ctx#view{page=output},
