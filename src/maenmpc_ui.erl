@@ -17,6 +17,11 @@
 	wnd_song, wnd_card, wnd_main, wnd_sel, wnd_sel_card, wnd_status,
 	wnd_keys,
 	db, cidx, page, storech, search_direction,
+	% search screen aka. filter (as opposed to foward slash search = search)
+	% values = #dbsearchin with input strings
+	% filter_selected = index into dbsearchin to identify currently focused
+	%                   field. num + 1 => search, num + 2 => reset
+	filter_values, filter_selected,
 	input_mode, input_string, input_subpos, input_max, input_y, input_x
 }).
 
@@ -27,10 +32,21 @@ init([NotifyToDB]) ->
 	cecho:noecho(),
 	cecho:keypad(?ceSTDSCR, true),
 	{Height, Width} = cecho:getmaxyx(),
-	{ok, init_windows(#view{height = Height, width = Width,
-			db = NotifyToDB, cidx = 1, page = help, storech = $_,
-			search_direction = 0, input_mode = none},
-			"Initializing...")}.
+	{ok, init_windows(#view{
+		height           = Height,
+		width            = Width,
+		db               = NotifyToDB,
+		cidx             = 1,
+		page             = help,
+		storech          = $_,
+		search_direction = 0,
+		input_mode       = none,
+		filter_values    = #dbsearchin{artist=[], album=[], title=[],
+					file=[], reqne=true, ymin=[], ymax=[],
+					rmin=[], rmax=[], smin=[], smax=[],
+					bmin=[], bmax=[]},
+		filter_selected  = #dbsearchin.artist
+	}, "Initializing...")}.
 
 init_color_pairs() ->
 	cecho:init_pair(?CPAIR_DEFAULT,     ?ceCOLOR_WHITE,  ?ceCOLOR_BLACK),
@@ -258,6 +274,8 @@ handle_cast({db_results, L}, Ctx) when L#dbscroll.type =:= Ctx#view.page ->
 	{noreply, draw_results(Ctx, L)};
 handle_cast({db_outputs, Outputs}, Ctx) when Ctx#view.page =:= output ->
 	{noreply, draw_outputs(Ctx, Outputs)};
+handle_cast({db_search_limits, L}, Ctx) when Ctx#view.page =:= search ->
+	{noreply, draw_search(Ctx, L)};
 handle_cast(_Cast, Ctx) ->
 	{noreply, Ctx}.
 
@@ -709,6 +727,95 @@ draw_outputs(Ctx, #dboutputs{outputs=Outputs, partitions=Partitions,
 		end, lists:nth(Player, Widths), lists:nth(Player, Partitions))
 	end, lists:zip(lists:seq(1, length(Outputs)), Outputs)),
 	cecho:wrefresh(Ctx#view.wnd_main),
+	Ctx.
+
+draw_search(Ctx, Limits=#dbsearchlim{year={YMin, YMax}, rating={RMin, RMax},
+			bitdepth={BMin, BMax}, samplerate={SMin, SMax}}) ->
+	cecho:werase(Ctx#view.wnd_main),
+	AttsD = ?ceCOLOR_PAIR(?CPAIR_DEFAULT),
+	cecho:attron(Ctx#view.wnd_main, AttsD),
+	% -- static elements --
+	% 1st col
+	cecho:mvwaddstr(Ctx#view.wnd_main, 1,   2, "Artist"),
+	cecho:mvwaddstr(Ctx#view.wnd_main, 3,   2, "Album"),
+	cecho:mvwaddstr(Ctx#view.wnd_main, 5,   2, "Title"),
+	cecho:mvwaddstr(Ctx#view.wnd_main, 7,   2, "File"),
+	cecho:mvwaddstr(Ctx#view.wnd_main, 11,  5, "F4:"),
+	% 2nd col
+	cecho:mvwaddstr(Ctx#view.wnd_main,  9, 14, "require non-empty"),
+	% 3rd col
+	cecho:mvwaddstr(Ctx#view.wnd_main,  1, 46, "Year"),
+	cecho:mvwaddstr(Ctx#view.wnd_main,  4, 46, "Rating"),
+	cecho:mvwaddstr(Ctx#view.wnd_main,  7, 46, "Samplerate"),
+	cecho:mvwaddstr(Ctx#view.wnd_main,  8, 46, "[Hz]"),
+	cecho:mvwaddstr(Ctx#view.wnd_main, 10, 46, "Bit depth"),
+	% 4th col
+	cecho:mvwaddstr(Ctx#view.wnd_main,  1, 67, "to"),
+	cecho:mvwaddstr(Ctx#view.wnd_main,  4, 67, "to"),
+	cecho:mvwaddstr(Ctx#view.wnd_main,  7, 67, "to"),
+	cecho:mvwaddstr(Ctx#view.wnd_main, 10, 67, "to"),
+	% -- dynamic elements --
+	% precompute forms (TODO WHEN FACTORING THIS OUT TO A FUNCTION IT IS GOING TO BECOME PART OF THE LITERAL POOL, IT ALREADY MAY BE THE CASE HERE SO THIS VARIANT SHOULD BE ADEQUETELY EFFICIENT)
+	FilterForms = #dbsearchin{
+		%         x,  y, len
+		artist = {11,  1, 31},
+		album  = {11,  3, 31},
+		title  = {11,  5, 31},
+		file   = {11,  7, 31},
+		reqne  = {11,  9,  1}, % bool field has size 1
+		ymin   = {59,  1,  6},
+		ymax   = {71,  1,  6},
+		rmin   = {59,  4,  6},
+		rmax   = {71,  4,  6},
+		smin   = {59,  7,  6},
+		smax   = {71,  7,  6},
+		bmin   = {59, 10,  6},
+		bmax   = {71, 10,  6}
+	},
+	IdxSearch = #dbsearchin.bmax + 1,
+	IdxReset  = #dbsearchin.bmax + 2,
+	% 2nd and 4th col
+	lists:foreach(fun(Idx) ->
+			DrawValue = case Idx =:= #dbsearchin.reqne of
+				true -> case
+					Ctx#view.filter_values#dbsearchin.reqne
+					of true -> "x"; false -> " " end;
+				false -> element(Idx, Ctx#view.filter_values)
+				end,
+			draw_value_at(Ctx, element(Idx, FilterForms), DrawValue,
+					Idx =:= Ctx#view.filter_selected)
+		end, lists:seq(#dbsearchin.artist, #dbsearchin.bmax)),
+	draw_value_at(Ctx, {11, 11, 6}, "SEARCH",
+					IdxSearch =:= Ctx#view.filter_selected),
+	draw_value_at(Ctx, {21, 11, 5}, "RESET",
+					IdxReset =:= Ctx#view.filter_selected),
+	% 4th col min max values
+	cecho:mvwaddstr(Ctx#view.wnd_main,  2, 59,
+			io_lib:format("~6.w      ~6.w", [YMin, YMax])),
+	% TODO x decode to ASTERISKS
+	cecho:mvwaddstr(Ctx#view.wnd_main,  5, 59,
+			io_lib:format("~6.w      ~6.w", [RMin, RMax])),
+	cecho:mvwaddstr(Ctx#view.wnd_main,  8, 59,
+			io_lib:format("~6.w      ~6.w", [SMin, SMax])),
+	cecho:mvwaddstr(Ctx#view.wnd_main, 11, 59,
+			io_lib:format("~6.w      ~6.w", [BMin, BMax])),
+	% end cols
+	cecho:attroff(Ctx#view.wnd_main, AttsD),
+	cecho:wrefresh(Ctx#view.wnd_main),
+	Ctx.
+
+draw_value_at(Ctx, {X, Y, Len}, Value, IsSelected) ->
+	cecho:attron(?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
+	cecho:mvwaddstr(Ctx#view.wnd_main, Y, X - 1,   "["),
+	cecho:mvwaddstr(Ctx#view.wnd_main, Y, X + Len, "]"),
+	cecho:attroff(?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
+	Attrs = case IsSelected of
+		true  -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT_SEL);
+		false -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT)
+		end,
+	cecho:attron(Ctx#view.wnd_main, Attrs),
+	cecho:mvwaddstr(Ctx#view.wnd_main, Y, X, utf8pad(Len, Value)),
+	cecho:attroff(Ctx#view.wnd_main, Attrs),
 	Ctx.
 
 ui_scroll(Ctx=#view{page=PG}, Offset) ->

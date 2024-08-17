@@ -39,3 +39,5 @@
 
 % each of the fields is a 2-tuple with min/max values
 -record(dbsearchlim, {year, rating, bitdepth, samplerate}).
+-record(dbsearchin, {artist, album, title, file, reqne, ymin, ymax, rmin, rmax,
+						smin, smax, bmin, bmax}).

@@ -575,7 +575,7 @@ ui_query_search_limits(Ctx) ->
 		end,
 		#dbsearchlim{year={9999, 0}, rating={100, 0},
 				bitdepth={99, 0}, samplerate={9999999, 0}},
-	Ctx#mpl.mpd_list)}),
+		Ctx#mpl.mpd_list)}),
 	Ctx.
 
 merge_searchlim(#dbsearchlim{year=YA, rating=RA, bitdepth=BA, samplerate=SA},
