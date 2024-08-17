@@ -204,7 +204,7 @@ draw_page_help(Ctx) ->
 		 <<"T"/utf8>>,        <<"radio:  stop radio"/utf8>>],
 		[<<"Tab"/utf8>>,
 		 <<">"/utf8>>,        <<"next"/utf8>>,
-		%<<"p"/utf8>>,        <<"podcasts"/utf8>>, % TODO
+		%<<"p"/utf8>>,        <<"podcasts"/utf8>>, % TODO GIVEN THAT WE ALSO HAVE RADIO AND SCROBBLING "BACKGROUND SERVICES" WOULD IT PROBABLY MAKE SENSE TO ESTABLISH A DEDICATED TAB F9 (?) for this that could be used to enable/disable the BG services [or even chose the f6 radio and replace it along the way?]
 		 [],                  [],
 		 [],                  []],
 		[<<"F1..F10"/utf8>>,
@@ -281,6 +281,7 @@ handle_cast(_Cast, Ctx) ->
 
 input_mode_keypress(Ctx0, Character) ->
 	case priority_action(Ctx0, Character) of
+	{cont, Ctx} -> Ctx;
 	{stop, Ctx} -> leave_input_mode(Ctx);
 	{_Any, Ctx} ->
 		% similar to d5mantui4_ui.erl
@@ -324,19 +325,19 @@ input_mode_keypress(Ctx0, Character) ->
 priority_action(Ctx, Character) ->
 	% Special Search Stop Outcome - some operations that cancel regular
 	% things (like forms) should continue in forward-slash search.
-	SSSO = case Ctx#view.input_mode of search -> cont; _Else  -> stop end,
+	SSSO = case Ctx#view.input_mode of search -> cont; _Else -> stop end,
 	case Character of
 	?ceKEY_UP     -> {SSSO, ui_scroll(Ctx, -1)};
 	?ceKEY_DOWN   -> {SSSO, ui_scroll(Ctx, +1)};
 	?ceKEY_PGDOWN -> {cont, ui_scroll(Ctx, +current_page_height(Ctx))};
 	?ceKEY_PGUP   -> {cont, ui_scroll(Ctx, -current_page_height(Ctx))};
+	?ceKEY_TAB    -> {cont, ui_tab(Ctx)};
 	?ceKEY_F(1)   -> {stop, draw_page_help(Ctx#view{page=help})};
 	?ceKEY_F(2)   -> {SSSO, ui_request(Ctx#view{page=queue},
 				{ui_query, queue, main_height(Ctx)-1})};
 	?ceKEY_F(4)   -> {SSSO, ui_request(Ctx#view{page=list},
 				{ui_query, list,  main_height(Ctx)})};
-	?ceKEY_F(5)   -> {stop, ui_request(Ctx#view{page=search},
-				{ui_query, search_limits})};
+	?ceKEY_F(5)   -> {cont, open_search_page(Ctx)};
 	?ceKEY_F(6)   -> {SSSO, ui_request(Ctx#view{page=radio},
 				{ui_query, radio, main_height(Ctx)})};
 	?ceKEY_F(8)   -> {stop, ui_request(Ctx#view{page=output},
@@ -394,7 +395,6 @@ single_key_action(Ctx, Character) ->
 	% TODO x undocumented keybindings!
 	$h               -> ui_request(Ctx, {ui_horizontal, Ctx#view.page, -1});
 	$l               -> ui_request(Ctx, {ui_horizontal, Ctx#view.page, +1});
-	?ceKEY_TAB       -> ui_request(Ctx, {ui_horizontal, Ctx#view.page, +1});
 	% TODO F5       - search screen
 	% TODO p        - podcasts
 	% TODO Space    - expand/contract
@@ -405,6 +405,44 @@ single_key_action(Ctx, Character) ->
 ui_request(Ctx, Request) ->
 	gen_server:cast(Ctx#view.db, Request),
 	Ctx.
+
+open_search_page(Ctx0) ->
+	Ctx1 = leave_input_mode(Ctx0),
+	update_search_page(Ctx1#view{page=search}).
+
+update_search_page(Ctx2) ->
+	ui_request(case Ctx2#view.filter_selected > #dbsearchin.bmax of
+	true ->
+		Ctx2#view{input_mode=none};
+	false ->
+		FilterForms = get_filter_forms(),
+		{X, Y, Len} = element(Ctx2#view.filter_selected, FilterForms),
+		update_cursor(Ctx2#view{
+			input_mode=form,
+			input_string=element(Ctx2#view.filter_selected,
+						Ctx2#view.filter_values),
+			input_subpos=0,
+			input_max=Len,
+			input_y=Y,
+			input_x=X
+		})
+	end, {ui_query, search_limits}).
+
+ui_tab(Ctx) ->
+	case Ctx#view.page of
+	output ->
+		ui_request(Ctx, {ui_horizontal, Ctx#view.page, +1});
+	search ->
+		% Don't stop the output but switch to next field.
+		Ctx1 = leave_input_mode(Ctx),
+		update_search_page(Ctx1#view{filter_selected=
+			case #dbsearchin.bmax - Ctx1#view.filter_selected of
+				-2   -> #dbsearchin.artist;
+				_Any ->  Ctx1#view.filter_selected + 1
+			end});
+	_Any ->
+		Ctx % ignore on other pages
+	end.
 
 draw_song_and_status(Ctx, Info) ->
 	% -- Song Info --
@@ -729,7 +767,7 @@ draw_outputs(Ctx, #dboutputs{outputs=Outputs, partitions=Partitions,
 	cecho:wrefresh(Ctx#view.wnd_main),
 	Ctx.
 
-draw_search(Ctx, Limits=#dbsearchlim{year={YMin, YMax}, rating={RMin, RMax},
+draw_search(Ctx, #dbsearchlim{year={YMin, YMax}, rating={RMin, RMax},
 			bitdepth={BMin, BMax}, samplerate={SMin, SMax}}) ->
 	cecho:werase(Ctx#view.wnd_main),
 	AttsD = ?ceCOLOR_PAIR(?CPAIR_DEFAULT),
@@ -755,27 +793,12 @@ draw_search(Ctx, Limits=#dbsearchlim{year={YMin, YMax}, rating={RMin, RMax},
 	cecho:mvwaddstr(Ctx#view.wnd_main,  7, 67, "to"),
 	cecho:mvwaddstr(Ctx#view.wnd_main, 10, 67, "to"),
 	% -- dynamic elements --
-	% precompute forms (TODO WHEN FACTORING THIS OUT TO A FUNCTION IT IS GOING TO BECOME PART OF THE LITERAL POOL, IT ALREADY MAY BE THE CASE HERE SO THIS VARIANT SHOULD BE ADEQUETELY EFFICIENT)
-	FilterForms = #dbsearchin{
-		%         x,  y, len
-		artist = {11,  1, 31},
-		album  = {11,  3, 31},
-		title  = {11,  5, 31},
-		file   = {11,  7, 31},
-		reqne  = {11,  9,  1}, % bool field has size 1
-		ymin   = {59,  1,  6},
-		ymax   = {71,  1,  6},
-		rmin   = {59,  4,  6},
-		rmax   = {71,  4,  6},
-		smin   = {59,  7,  6},
-		smax   = {71,  7,  6},
-		bmin   = {59, 10,  6},
-		bmax   = {71, 10,  6}
-	},
+	FilterForms = get_filter_forms(),
 	IdxSearch = #dbsearchin.bmax + 1,
 	IdxReset  = #dbsearchin.bmax + 2,
 	% 2nd and 4th col
 	lists:foreach(fun(Idx) ->
+			% TODO ASTAT NEED TO RE-THINK THIS REQNE STUFF BECAUSE WOULD IT MAYBE MAKE MORE SENSE TO HAVE IT LIKE SEARCH/RESET?
 			DrawValue = case Idx =:= #dbsearchin.reqne of
 				true -> case
 					Ctx#view.filter_values#dbsearchin.reqne
@@ -803,6 +826,24 @@ draw_search(Ctx, Limits=#dbsearchlim{year={YMin, YMax}, rating={RMin, RMax},
 	cecho:attroff(Ctx#view.wnd_main, AttsD),
 	cecho:wrefresh(Ctx#view.wnd_main),
 	Ctx.
+
+get_filter_forms() ->
+	#dbsearchin{
+		%         x,  y, len
+		artist = {11,  1, 31},
+		album  = {11,  3, 31},
+		title  = {11,  5, 31},
+		file   = {11,  7, 31},
+		reqne  = {11,  9,  1}, % bool field has size 1
+		ymin   = {59,  1,  6},
+		ymax   = {71,  1,  6},
+		rmin   = {59,  4,  6},
+		rmax   = {71,  4,  6},
+		smin   = {59,  7,  6},
+		smax   = {71,  7,  6},
+		bmin   = {59, 10,  6},
+		bmax   = {71, 10,  6}
+	}.
 
 draw_value_at(Ctx, {X, Y, Len}, Value, IsSelected) ->
 	cecho:attron(?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
@@ -854,7 +895,8 @@ initialize_input(Ctx) ->
 update_cursor(Ctx) ->
 	case identify_input_window(Ctx) of
 	none -> Ctx;
-	Wnd  -> cecho:wmove(Wnd, 0, Ctx#view.input_subpos + Ctx#view.input_x),
+	Wnd  -> cecho:wmove(Wnd, Ctx#view.input_y,
+				Ctx#view.input_subpos + Ctx#view.input_x),
 		cecho:wrefresh(Wnd),
 		Ctx
 	end.
@@ -885,6 +927,7 @@ update_input(Ctx) ->
 		update_cursor(Ctx)
 	end.
 
+identify_input_window(Ctx=#view{input_mode=form})   -> Ctx#view.wnd_main;
 identify_input_window(Ctx=#view{input_mode=search}) -> Ctx#view.wnd_status;
 identify_input_window(_Ctx) -> none.
 
@@ -893,12 +936,16 @@ leave_input_mode(Ctx) ->
 	search ->
 		% Escape in search mode drops input without confirmation!
 		cecho:werase(Ctx#view.wnd_status),
-		cecho:wrefresh(Ctx#view.wnd_status);
-	% TODO x OTHER MODES MAY NEED TO ACCEPT/REJECT THE INPUT HERE BTW. IT WOULD MAKE SENSE TO ALLOW GOING BACK TO IMPLIED NORMAL MODE FROM THE SEARCH FORM HERE!
+		cecho:wrefresh(Ctx#view.wnd_status),
+		Ctx#view{input_mode=none};
+	form ->
+		% TODO X HAS SOME SMALL PROBLEM IF WE NEED FORMS ON OTHER SCREENS. THIS ONE ALWAYS THINKS ITS ABOUT SEARCH FORM...
+		Ctx#view{input_mode=none, filter_values=
+				setelement(Ctx#view.filter_selected,
+				Ctx#view.filter_values, Ctx#view.input_string)};
 	_Any ->
-		ok
-	end,
-	Ctx#view{input_mode=none}.
+		Ctx
+	end.
 
 input_mode_enter(Ctx) ->
 	leave_input_mode(case Ctx#view.input_mode of
