@@ -1000,18 +1000,56 @@ filter_reqne_const() ->
 		{tagop, title,  eq, ""}
 	]}}.
 
-% TODO X THIS IS A PITA - DON'T SUPPORT NUMERIC RANGE SEARCHING FOR NOW!
-filter_year(_Min, _Max, List0) ->
-	List0.
+% MPD does not seem to support searching date ranges hence we construct our own
+% date range search based on regular expressions. This basically works by
+% emulating the counting through regex and declaring that either the digits
+% match and the next digit has to be checked or the digit already indicates that
+% it is greater/lower the given string (and only the same number of digits may
+% follow). Effectively, there is a loose assumption that years will always have
+% four digits, but the code could be extended to account for more/less digits
+% by taking begin and end of string into account and declaring a certain format
+% for the dates that is supported.
+filter_year(Min, Max, List0) ->
+	List1 = case lists:dropwhile(fun(X) -> X == $0 end, Min) of
+		[]  -> List0;
+		Num -> [{tagop, date, match, filter_regex_ge_outer(Num)}|List0]
+		end,
+	case Max of
+		[]   -> List1;
+		% Need to change this place here if fewer than four digits
+		% need to be supported as well...
+		_Max -> [{tagop, date, match, filter_regex_le(Max)}|List1]
+	end.
 
-%	List1 = case string:length(Min) of
-%		0 -> List0;
-%		_Non0 ->
-%			[{tagop, Tag,  string:to_integer(Min)
-%
-%% assume that Val is a list of characters
-%% 1449 -> 1449 | 14[5-9][0-9] | 1[5-9][0-9]{2} | [2-9][0-9]{3,}
-%filter_min_regex(Val) ->
+filter_regex_ge_outer(Num) ->
+	io_lib:format("(~s)|([1-9][0-9]{~w,})",
+					[filter_regex_ge(Num), length(Num)]).
+
+filter_regex_ge([$9|[]]) -> "9";
+filter_regex_ge([H|[]]) -> io_lib:format("[~c-9]", [H]);
+filter_regex_ge([H|T]) ->
+	io_lib:format("~s(~c(~s))", [case filter_charclass_gt(H) of
+		none -> "";
+		Pre  -> io_lib:format("(~s[0-9]{~w})|", [Pre, length(T)])
+	end, H, filter_regex_ge(T)]).
+
+filter_charclass_gt($9)   -> none;
+filter_charclass_gt($8)   -> "9";
+filter_charclass_gt(Char) -> io_lib:format("[~w-9]",
+						[list_to_integer([Char]) + 1]).
+
+filter_regex_le([$0|[]]) -> "0";
+filter_regex_le([H|[]]) -> io_lib:format("[0-~c]", [H]);
+filter_regex_le([H|T]) ->
+	io_lib:format("~s(~c(~s))", [case filter_charclass_lt(H) of
+		none -> "";
+		Pre  -> io_lib:format("(~s[0-9]{~w})|", [Pre, length(T)])
+	end, H, filter_regex_le(T)]).
+
+filter_charclass_lt($0)   -> none;
+filter_charclass_lt($1)   -> "0";
+filter_charclass_lt(Char) -> io_lib:format("[0-~w]",
+						[list_to_integer([Char]) - 1]).
 
 % align with maenmpc_erlmpd:format_Rating
 filter_rating(RatingStr) ->
