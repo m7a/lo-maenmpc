@@ -101,7 +101,7 @@ handle_call({query_artists, QList, Filter}, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
 		[[query_rating(parse_metadata(El, Ctx), Conn, Ctx)
 			|| El <- erlmpd:find(Conn, {land,
-					[Filter, {tagop, artist, eq, Artist}]})]
+					[{tagop, artist, eq, Artist}, Filter]})]
 		|| Artist <- QList]
 	end), Ctx};
 handle_call(query_output, _From, Ctx) ->
@@ -150,21 +150,18 @@ handle_call(query_search_limits, _From, Ctx) ->
 		AllYears = [string:to_integer(string:substr([Item], 1, 4)) ||
 					Item <- erlmpd:list(Conn, date),
 						string:length(Item) >= 4],
-		% TODO Query sample rate and bit depth by trying fixed combinations. To that end, store a list of sample rates x list of bit depths for querying
-		%      -> before implementing this check how difficult it would be to implement in MPD itself?
-		% TODO Query ratings as follows: Binary search 0 upwards up to max 100 and 100 downawards down to min. 0
-		%      {ok, Conn2} = erlmpd:connect("172.17.0.1", 6600), erlmpd:command(Conn2, "list date").
+		% TODO Query ratings as follows: Binary search 0 upwards up to max 100 and 100 downawards down to min. 0 / {ok, Conn2} = erlmpd:connect("172.17.0.1", 6600), erlmpd:command(Conn2, "list date").
 		#dbsearchlim{year=year_min_max(AllYears, 9999, 0),
-				rating={0, 100}, bitdepth={16, 24},
-				samplerate={44100, 96000}}
+								rating={0, 100}}
 	end), Ctx};
 % returns Item or `false` if no matching value found here
-handle_call({search_by_artists, Direction, Artists, Query}, _From, Ctx) ->
+handle_call({search_by_artists, Direction, Artists, Query, Filter}, _Fr, Ctx) ->
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
 		% entry match Artist and (title contains Q || album contains Q)
 		Results = [maenmpc_erlmpd:to_dbsong(Ent, Ctx#spl.idx,
 					Ctx#spl.len) || Ent <- erlmpd:search(
 			Conn, {land, [
+				Filter,
 				case Artists of
 				[Artist] ->
 					{tagop, artist, eq, Artist};

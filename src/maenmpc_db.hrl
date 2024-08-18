@@ -38,6 +38,6 @@
 -record(dboutputs, {outputs, partitions, active_set, assigned, cursor}).
 
 % each of the fields is a 2-tuple with min/max values
--record(dbsearchlim, {year, rating, bitdepth, samplerate}).
--record(dbsearchin, {artist, album, title, file, reqne, ymin, ymax, rmin, rmax,
-						smin, smax, bmin, bmax}).
+-record(dbsearchlim, {year, rating}).
+-record(dbsearchin, {artist, album, title, format, ymin, ymax, rmin, rmax,
+			reqne}).

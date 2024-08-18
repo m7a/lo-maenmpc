@@ -8,7 +8,8 @@
 	ui, radio, alsa, mpd_list, mpd_active, mpd_ratings,
 	maloja, outputs,
 	search_page, search_term,
-	current_song, current_queue, current_list, current_radio, current_filter
+	current_song, current_queue, current_list, current_radio,
+	current_filter, current_frating
 }).
 
 init([NotifyToUI, NotifyToRadio]) ->
@@ -23,33 +24,36 @@ init([NotifyToUI, NotifyToRadio]) ->
 	gen_server:cast(NotifyToUI, {db_cidx,
 				proplists:get_value(MPDFirst, MPDListIdx)}),
 	{ok, reset_views(#mpl{
-		ui             = NotifyToUI,
-		radio          = NotifyToRadio,
-		alsa           = ALSAHWInfo,
-		mpd_list       = MPDListIdx, % [{name, idx}]
-		mpd_active     = MPDFirst,
-		mpd_ratings    = PrimaryRatings,
-		maloja         = maenmpc_maloja:conn(Maloja),
-		outputs        = none,
-		search_term    = "",
-		current_song   = maenmpc_erlmpd:epsilon_song(length(MPDList)),
-		current_filter = {lnot, {land, [{tagop, artist, eq, ""},
-						{tagop, album,  eq, ""},
-						{tagop, title,  eq, ""}]}}
+		ui              = NotifyToUI,
+		radio           = NotifyToRadio,
+		alsa            = ALSAHWInfo,
+		mpd_list        = MPDListIdx, % [{name, idx}]
+		mpd_active      = MPDFirst,
+		mpd_ratings     = PrimaryRatings,
+		maloja          = maenmpc_maloja:conn(Maloja),
+		outputs         = none,
+		search_term     = "",
+		current_song    = maenmpc_erlmpd:epsilon_song(length(MPDList)),
+		current_filter  = filter_reqne_const(),
+		% TODO THIS NEW FIELD MUST BE PASSED TO SINGLEPLAYER AND IF ITS VALUE IS /= any,any THE SINGLEPLAYER MUST GO AHEAD AND QUERY FILES BY THESE LIMITS AND THEN GENERATE A FILTER FOR INCLUSION IN THE FILTER EXPRESSION (IT MAY CONTAIN A SET OF FILES TO BEGIN WITH EVEN IF THIS MEANS A 600+ entries filter is generated, MPD does not give us much choice here...)
+		current_frating = {any, any} % rating filter...
 	})}.
 
 reset_views(Ctx) ->
-	Ctx#mpl{current_song   = maenmpc_erlmpd:epsilon_song(length(
+	reset_list(Ctx#mpl{
+		current_song   = maenmpc_erlmpd:epsilon_song(length(
 							Ctx#mpl.mpd_list)),
 		current_queue  = #dbscroll{type=queue, cnt=[], coffset=0,
 					csel=0, total=-1, qoffset=0,
 					last_query_len=0, user_data=none},
-		current_list   = #dbscroll{type=list, cnt=[], coffset=0,
-					csel=0, total=-1, last_query_len=0,
-					qoffset=0, user_data={[], [], []}},
 		current_radio  = #dbscroll{type=radio, cnt=[], coffset=0,
 					csel=0, total=0, last_query_len=0,
-					qoffset=0, user_data=-1}}.
+					qoffset=0, user_data=-1}}).
+
+reset_list(Ctx) ->
+	Ctx#mpl{current_list = #dbscroll{type=list, cnt=[], coffset=0,
+					csel=0, total=-1, last_query_len=0,
+					qoffset=0, user_data={[], [], []}}}.
 
 handle_call(_Call, _From, Ctx) ->
 	{reply, ok, Ctx}.
@@ -131,6 +135,8 @@ handle_cast({ui_search, Direction, Page, String}, Ctx) ->
 % TODO x search: Backward search from end of list with an item that is maybe off the scren causes something to be selected outside of the visible area (if at all).
 handle_cast({ui_search_continue, Direction, Page}, Ctx) ->
 	{noreply, search(Direction, Ctx#mpl{search_page=Page})};
+handle_cast({ui_set_filter, FilterValues}, Ctx) ->
+	{noreply, set_filter(FilterValues, Ctx)};
 handle_cast(_Cast, Ctx) ->
 	{noreply, Ctx}.
 
@@ -465,7 +471,8 @@ sum_artists(Artists) ->
 	lists:foldl(fun({_Artist, Songs}, Acc) -> Songs + Acc end, 0, Artists).
 
 query_playcount(Ctx, List) when Ctx#mpl.maloja =:= {none, none} orelse
-			length(List#dbscroll.cnt) < List#dbscroll.csel ->
+			length(List#dbscroll.cnt) < List#dbscroll.csel orelse
+			length(List#dbscroll.cnt) == 0 ->
 	List;
 query_playcount(Ctx, List=#dbscroll{cnt=Cnt, csel=CSel}) ->
 	Prefix = lists:sublist(Cnt, 1, CSel),
@@ -573,15 +580,13 @@ ui_query_search_limits(Ctx) ->
 			false -> Lim
 			end
 		end,
-		#dbsearchlim{year={9999, 0}, rating={100, 0},
-				bitdepth={99, 0}, samplerate={9999999, 0}},
+		#dbsearchlim{year={9999, 0}, rating={100, 0}},
 		Ctx#mpl.mpd_list)}),
 	Ctx.
 
-merge_searchlim(#dbsearchlim{year=YA, rating=RA, bitdepth=BA, samplerate=SA},
-		#dbsearchlim{year=YB, rating=RB, bitdepth=BB, samplerate=SB}) ->
-	#dbsearchlim{year=merge_limits(YA, YB), rating=merge_limits(RA, RB),
-		bitdepth=merge_limits(BA, BB), samplerate=merge_limits(SA, SB)}.
+merge_searchlim(#dbsearchlim{year=YA, rating=RA},
+		#dbsearchlim{year=YB, rating=RB}) ->
+	#dbsearchlim{year=merge_limits(YA, YB), rating=merge_limits(RA, RB)}.
 
 merge_limits({MinA, MaxA}, {MinB, MaxB}) ->
 	{min(MinA, MinB), max(MaxA, MaxB)}.
@@ -831,43 +836,45 @@ item_matches_query(#dbsong{key={Artist, Album, Title}}, Query) ->
 	end.
 
 % TODO x search: With sufficient query length may attain better performance by handing the query in its entirety over to the database and only from the results determine what is “after” and “before” current cursor in search direction. However, this would incur jet another path of the implementation to be tested. Remain with the current (slower) implementation for now.
-search_list_outside(Direction, Ctx=#mpl{search_term=Query, current_list=
-			#dbscroll{user_data={_Artists, ABeforeRev, AAfter}}}) ->
+search_list_outside(Direction, Ctx=#mpl{current_filter=Filter,
+				search_term=Query, current_list=#dbscroll{
+				user_data={_Artists, ABeforeRev, AAfter}}}) ->
 	ActivePlayers = get_active_players(Ctx),
 	List1 = case Direction of
-		1  -> AAfter;
+		 1 -> AAfter;
 		-1 -> ABeforeRev
 		end,
-	case search_next_outside(Direction, List1, Query,
+	case search_next_outside(Direction, List1, Query, Filter,
 							ActivePlayers) of
 	false ->
 		List2 = lists:reverse(case Direction of
 			1  -> ABeforeRev;
 			-1 -> AAfter
 			end),
-		search_next_outside(Direction, List2, Query,
+		search_next_outside(Direction, List2, Query, Filter,
 							ActivePlayers);
 	SecondResultA ->
 		SecondResultA
 	end.
 
-search_next_outside(_Direction, [], _Query, _ActivePlayers) ->
+search_next_outside(_Direction, [], _Query, _Filter, _ActivePlayers) ->
 	false;
 % Limit number of artists to query at once (avoid sending overly large queries
 % to MPD)
-search_next_outside(Direction, Artists, Query, ActivePlayers)
+search_next_outside(Direction, Artists, Query, Filter, ActivePlayers)
 			when length(Artists) > ?ARTIST_QUERY_CHUNK_SIZE ->
 	case search_next_outside(Direction, lists:sublist(Artists,
-			?ARTIST_QUERY_CHUNK_SIZE), Query, ActivePlayers) of
+				?ARTIST_QUERY_CHUNK_SIZE), Query,
+				Filter, ActivePlayers) of
 	false  -> search_next_outside(Direction, lists:sublist(Artists,
-			?ARTIST_QUERY_CHUNK_SIZE, length(Artists)),
-			Query, ActivePlayers);
+				?ARTIST_QUERY_CHUNK_SIZE, length(Artists)),
+				Query, Filter, ActivePlayers);
 	Result -> Result
 	end;
-search_next_outside(Direction, Artists, Query, ActivePlayers) ->
+search_next_outside(Direction, Artists, Query, Filter, ActivePlayers) ->
 	Results = [call_singleplayer(Name, {search_by_artists, Direction,
-				[Artist || {Artist, _Songs} <- Artists], Query})
-				|| Name <- ActivePlayers],
+				[Artist || {Artist, _Songs} <- Artists], Query,
+				Filter}) || Name <- ActivePlayers],
 	case [Value || Value <- Results, Value =/= false] of
 	[] ->
 		false;
@@ -957,6 +964,63 @@ find_index_for_key([H|Tail], Key, Idx) ->
 	case H#dbsong.key =:= Key of
 	true  -> Idx;
 	false -> find_index_for_key(Tail, Key, Idx + 1)
+	end.
+
+set_filter(#dbsearchin{artist=Artist, album=Album, title=Title, format=Format,
+				ymin=YMin, ymax=YMax, rmin=RMin, rmax=RMax,
+				reqne=ReqNE}, Ctx) ->
+	FilterIn = filter_string({tagop, artist, contains, Artist},
+		   filter_string({tagop, album,  contains, Album},
+		   filter_string({tagop, title,  contains, Title},
+		   filter_string({audio_format_match, Format},
+		   filter_year(YMin, YMax,
+		   filter_reqne(ReqNE, [])))))),
+	reset_list(Ctx#mpl{
+		current_filter = case FilterIn of
+			[]    -> {base, ""};   % filter that machtes everything!
+			[It]  -> It;           % single item filter is easy
+			Multi -> {land, Multi} % encapsulate multi-filter
+			end,
+		current_frating = {filter_rating(RMin), filter_rating(RMax)}
+	}).
+
+filter_string(Op, List0) ->
+	case string:length(element(tuple_size(Op), Op)) of
+	0     -> List0;
+	_Non0 -> [Op|List0]
+	end.
+
+filter_reqne("x",  List0) -> [filter_reqne_const()|List0];
+filter_reqne(_Any, List0) -> List0.
+
+filter_reqne_const() ->
+	{lnot, {land, [
+		{tagop, artist, eq, ""},
+		{tagop, album,  eq, ""},
+		{tagop, title,  eq, ""}
+	]}}.
+
+% TODO X THIS IS A PITA - DON'T SUPPORT NUMERIC RANGE SEARCHING FOR NOW!
+filter_year(_Min, _Max, List0) ->
+	List0.
+
+%	List1 = case string:length(Min) of
+%		0 -> List0;
+%		_Non0 ->
+%			[{tagop, Tag,  string:to_integer(Min)
+%
+%% assume that Val is a list of characters
+%% 1449 -> 1449 | 14[5-9][0-9] | 1[5-9][0-9]{2} | [2-9][0-9]{3,}
+%filter_min_regex(Val) ->
+
+% align with maenmpc_erlmpd:format_Rating
+filter_rating(RatingStr) ->
+	case string:length(RatingStr) of
+	0 ->
+		any;
+	_Non0 ->
+		% TODO PARSE HERE
+		20
 	end.
 
 handle_info(interrupt_idle, Ctx) ->

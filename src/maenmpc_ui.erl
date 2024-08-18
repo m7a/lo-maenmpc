@@ -42,9 +42,8 @@ init([NotifyToDB]) ->
 		search_direction = 0,
 		input_mode       = none,
 		filter_values    = #dbsearchin{artist=[], album=[], title=[],
-					file=[], reqne=true, ymin=[], ymax=[],
-					rmin=[], rmax=[], smin=[], smax=[],
-					bmin=[], bmax=[]},
+					format=[], ymin=[], ymax=[], rmin=[],
+					rmax=[], reqne="x"},
 		filter_selected  = #dbsearchin.artist
 	}, "Initializing...")}.
 
@@ -307,9 +306,12 @@ input_mode_keypress(Ctx0, Character) ->
 		?ceKEY_BACKSPACE when Ctx#view.input_subpos > 0
 		             -> delete_character(Ctx, -1);
 		?ceKEY_BACKSPACE -> Ctx;
-		% TODO x WHAT IF WRITING BEYOND LINE LENGTH? (see d5mantui)
+		$  when Ctx#view.input_max == 1 -> input_toggle_bool(Ctx);
 		% TODO x Not really unicode-capable! To do this switch from lists: to string:
-		Ch when Ch < 256 ->
+		Ch when Ch < 256 andalso Ctx#view.input_subpos <
+							Ctx#view.input_max
+					andalso length(Ctx#view.input_string) <
+							Ctx#view.input_max ->
 			{Prefix, Suffix} = lists:split(Ctx#view.input_subpos,
 							Ctx#view.input_string),
 			update_input(Ctx#view{
@@ -335,7 +337,14 @@ priority_action(Ctx, Character) ->
 	?ceKEY_F(1)   -> {stop, draw_page_help(Ctx#view{page=help})};
 	?ceKEY_F(2)   -> {SSSO, ui_request(Ctx#view{page=queue},
 				{ui_query, queue, main_height(Ctx)-1})};
-	?ceKEY_F(4)   -> {SSSO, ui_request(Ctx#view{page=list},
+	% We may need to get updated data from leave_input_mode before entering
+	% the new screen hence it is not sufficient to wait for the
+	% leave_input_mode to be computed after the ui_request here.
+	% “cont” indicates that if there was anything of relevance to process it
+	% was already done inside here...
+	?ceKEY_F(4)   -> Ctx2 = case SSSO of stop -> leave_input_mode(Ctx);
+								_Any -> Ctx end,
+			 {cont, ui_request(Ctx2#view{page=list},
 				{ui_query, list,  main_height(Ctx)})};
 	?ceKEY_F(5)   -> {cont, open_search_page(Ctx)};
 	?ceKEY_F(6)   -> {SSSO, ui_request(Ctx#view{page=radio},
@@ -411,7 +420,7 @@ open_search_page(Ctx0) ->
 	update_search_page(Ctx1#view{page=search}).
 
 update_search_page(Ctx2) ->
-	ui_request(case Ctx2#view.filter_selected > #dbsearchin.bmax of
+	ui_request(case Ctx2#view.filter_selected > #dbsearchin.reqne of
 	true ->
 		Ctx2#view{input_mode=none};
 	false ->
@@ -436,7 +445,7 @@ ui_tab(Ctx) ->
 		% Don't stop the output but switch to next field.
 		Ctx1 = leave_input_mode(Ctx),
 		update_search_page(Ctx1#view{filter_selected=
-			case #dbsearchin.bmax - Ctx1#view.filter_selected of
+			case #dbsearchin.reqne - Ctx1#view.filter_selected of
 				-2   -> #dbsearchin.artist;
 				_Any ->  Ctx1#view.filter_selected + 1
 			end});
@@ -767,47 +776,35 @@ draw_outputs(Ctx, #dboutputs{outputs=Outputs, partitions=Partitions,
 	cecho:wrefresh(Ctx#view.wnd_main),
 	Ctx.
 
-draw_search(Ctx, #dbsearchlim{year={YMin, YMax}, rating={RMin, RMax},
-			bitdepth={BMin, BMax}, samplerate={SMin, SMax}}) ->
+draw_search(Ctx, #dbsearchlim{year={YMin, YMax}, rating={RMin, RMax}}) ->
 	cecho:werase(Ctx#view.wnd_main),
 	AttsD = ?ceCOLOR_PAIR(?CPAIR_DEFAULT),
 	cecho:attron(Ctx#view.wnd_main, AttsD),
 	% -- static elements --
 	% 1st col
-	cecho:mvwaddstr(Ctx#view.wnd_main, 1,   2, "Artist"),
-	cecho:mvwaddstr(Ctx#view.wnd_main, 3,   2, "Album"),
-	cecho:mvwaddstr(Ctx#view.wnd_main, 5,   2, "Title"),
-	cecho:mvwaddstr(Ctx#view.wnd_main, 7,   2, "File"),
+	cecho:mvwaddstr(Ctx#view.wnd_main,  1,  2, "Artist"),
+	cecho:mvwaddstr(Ctx#view.wnd_main,  3,  2, "Album"),
+	cecho:mvwaddstr(Ctx#view.wnd_main,  5,  2, "Title"),
+	cecho:mvwaddstr(Ctx#view.wnd_main,  7,  2, "Format"),
 	cecho:mvwaddstr(Ctx#view.wnd_main, 11,  5, "F4:"),
 	% 2nd col
-	cecho:mvwaddstr(Ctx#view.wnd_main,  9, 14, "require non-empty"),
+	cecho:mvwaddstr(Ctx#view.wnd_main,  7, 25, "e.g.: 96000:24:*"),
 	% 3rd col
 	cecho:mvwaddstr(Ctx#view.wnd_main,  1, 46, "Year"),
 	cecho:mvwaddstr(Ctx#view.wnd_main,  4, 46, "Rating"),
-	cecho:mvwaddstr(Ctx#view.wnd_main,  7, 46, "Samplerate"),
-	cecho:mvwaddstr(Ctx#view.wnd_main,  8, 46, "[Hz]"),
-	cecho:mvwaddstr(Ctx#view.wnd_main, 10, 46, "Bit depth"),
+	cecho:mvwaddstr(Ctx#view.wnd_main,  7, 51, "require non-empty"),
 	% 4th col
 	cecho:mvwaddstr(Ctx#view.wnd_main,  1, 67, "to"),
 	cecho:mvwaddstr(Ctx#view.wnd_main,  4, 67, "to"),
-	cecho:mvwaddstr(Ctx#view.wnd_main,  7, 67, "to"),
-	cecho:mvwaddstr(Ctx#view.wnd_main, 10, 67, "to"),
 	% -- dynamic elements --
 	FilterForms = get_filter_forms(),
-	IdxSearch = #dbsearchin.bmax + 1,
-	IdxReset  = #dbsearchin.bmax + 2,
+	IdxSearch = #dbsearchin.reqne + 1,
+	IdxReset  = #dbsearchin.reqne + 2,
 	% 2nd and 4th col
-	lists:foreach(fun(Idx) ->
-			% TODO ASTAT NEED TO RE-THINK THIS REQNE STUFF BECAUSE WOULD IT MAYBE MAKE MORE SENSE TO HAVE IT LIKE SEARCH/RESET?
-			DrawValue = case Idx =:= #dbsearchin.reqne of
-				true -> case
-					Ctx#view.filter_values#dbsearchin.reqne
-					of true -> "x"; false -> " " end;
-				false -> element(Idx, Ctx#view.filter_values)
-				end,
-			draw_value_at(Ctx, element(Idx, FilterForms), DrawValue,
+	lists:foreach(fun(Idx) -> draw_value_at(Ctx, element(Idx, FilterForms),
+					element(Idx, Ctx#view.filter_values),
 					Idx =:= Ctx#view.filter_selected)
-		end, lists:seq(#dbsearchin.artist, #dbsearchin.bmax)),
+		end, lists:seq(#dbsearchin.artist, #dbsearchin.reqne)),
 	draw_value_at(Ctx, {11, 11, 6}, "SEARCH",
 					IdxSearch =:= Ctx#view.filter_selected),
 	draw_value_at(Ctx, {21, 11, 5}, "RESET",
@@ -815,13 +812,9 @@ draw_search(Ctx, #dbsearchlim{year={YMin, YMax}, rating={RMin, RMax},
 	% 4th col min max values
 	cecho:mvwaddstr(Ctx#view.wnd_main,  2, 59,
 			io_lib:format("~6.w      ~6.w", [YMin, YMax])),
-	% TODO x decode to ASTERISKS
-	cecho:mvwaddstr(Ctx#view.wnd_main,  5, 59,
-			io_lib:format("~6.w      ~6.w", [RMin, RMax])),
-	cecho:mvwaddstr(Ctx#view.wnd_main,  8, 59,
-			io_lib:format("~6.w      ~6.w", [SMin, SMax])),
-	cecho:mvwaddstr(Ctx#view.wnd_main, 11, 59,
-			io_lib:format("~6.w      ~6.w", [BMin, BMax])),
+	cecho:mvwaddstr(Ctx#view.wnd_main,  5, 58, io_lib:format(
+			"~s/~w   ~s/~w", [maenmpc_erlmpd:format_rating(RMin),
+			RMin, maenmpc_erlmpd:format_rating(RMax), RMax])),
 	% end cols
 	cecho:attroff(Ctx#view.wnd_main, AttsD),
 	cecho:wrefresh(Ctx#view.wnd_main),
@@ -833,16 +826,12 @@ get_filter_forms() ->
 		artist = {11,  1, 31},
 		album  = {11,  3, 31},
 		title  = {11,  5, 31},
-		file   = {11,  7, 31},
-		reqne  = {11,  9,  1}, % bool field has size 1
+		format = {11,  7, 11},
 		ymin   = {59,  1,  6},
 		ymax   = {71,  1,  6},
 		rmin   = {59,  4,  6},
 		rmax   = {71,  4,  6},
-		smin   = {59,  7,  6},
-		smax   = {71,  7,  6},
-		bmin   = {59, 10,  6},
-		bmax   = {71, 10,  6}
+		reqne  = {47,  7,  1}
 	}.
 
 draw_value_at(Ctx, {X, Y, Len}, Value, IsSelected) ->
@@ -908,22 +897,30 @@ delete_character(Ctx, Delta) ->
 	Wnd  -> {Prefix, [_Drop|Suffix]} = lists:split(Ctx#view.input_subpos +
 						Delta, Ctx#view.input_string),
 		NewQuery = Prefix ++ Suffix,
-		cecho:attron(Wnd, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
+		Atts = get_input_atts(Ctx),
+		cecho:attron(Wnd, Atts),
 		cecho:mvwaddstr(Wnd, Ctx#view.input_y, Ctx#view.input_x +
 							length(NewQuery), " "),
-		cecho:attroff(Wnd, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
+		cecho:attroff(Wnd, Atts),
 		update_input(Ctx#view{input_string = NewQuery,
 			input_subpos = Ctx#view.input_subpos + Delta})
+	end.
+
+get_input_atts(Ctx) ->
+	case Ctx#view.input_mode of
+	form -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT_SEL);
+	_Any -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT)
 	end.
 
 % d5man4_ui.erl
 update_input(Ctx) ->
 	case identify_input_window(Ctx) of
 	none -> Ctx;
-	Wnd  -> cecho:attron(Wnd, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
+	Wnd  -> Atts = get_input_atts(Ctx),
+		cecho:attron(Wnd, Atts),
 		cecho:mvwaddstr(Wnd, Ctx#view.input_y, Ctx#view.input_x,
 							Ctx#view.input_string),
-		cecho:attroff(Wnd, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
+		cecho:attroff(Wnd, Atts),
 		update_cursor(Ctx)
 	end.
 
@@ -939,20 +936,34 @@ leave_input_mode(Ctx) ->
 		cecho:wrefresh(Ctx#view.wnd_status),
 		Ctx#view{input_mode=none};
 	form ->
-		% TODO X HAS SOME SMALL PROBLEM IF WE NEED FORMS ON OTHER SCREENS. THIS ONE ALWAYS THINKS ITS ABOUT SEARCH FORM...
-		Ctx#view{input_mode=none, filter_values=
-				setelement(Ctx#view.filter_selected,
-				Ctx#view.filter_values, Ctx#view.input_string)};
+		% This may become a problem once we attempt to have forms on
+		% other screens because right now it is assumed that the
+		% only valid form screen is the filter screen.
+		FV = setelement(Ctx#view.filter_selected,
+				Ctx#view.filter_values, Ctx#view.input_string),
+		ui_request(Ctx#view{input_mode=none, filter_values=FV},
+							{ui_set_filter, FV});
 	_Any ->
 		Ctx
 	end.
 
+input_mode_enter(Ctx) when Ctx#view.input_max =:= 1 ->
+	input_toggle_bool(Ctx);
 input_mode_enter(Ctx) ->
 	leave_input_mode(case Ctx#view.input_mode of
 	search -> ui_request(Ctx, {ui_search, Ctx#view.search_direction,
 					Ctx#view.page, Ctx#view.input_string});
 	_Any   -> Ctx
 	end).
+
+input_toggle_bool(Ctx=#view{page=search, filter_values=FLT}) ->
+	NewVal = case Ctx#view.input_string of "x" -> " "; _Other -> "x" end,
+	update_input(Ctx#view{
+		input_string=NewVal,
+		filter_values=FLT#dbsearchin{reqne=NewVal}
+	});
+input_toggle_bool(Ctx) ->
+	Ctx.
 
 handle_info(_Message,    Context)         -> {noreply, Context}.
 code_change(_OldVersion, Context, _Extra) -> {ok,      Context}.
