@@ -93,16 +93,22 @@ handle_call({query_queue, ItemsRequested, CurrentQ}, _From, Ctx) ->
 		}, Ctx1}
 	end),
 	{reply, NewQ, Ctx2};
-handle_call({query_artists_count, Filter}, _From, Ctx) ->
+handle_call({query_artists_count, Filter, FRating}, _From, Ctx) ->
+	% TODO SEARCHRATINGS - C3 - Here we query all file names and then for each file name the metadata with Filter applied and if anything comes out we project to the Artists column ourselves
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
-		erlmpd:count_group(Conn, artist, Filter)
+		case FRating of
+		{none, none} -> erlmpd:count_group(Conn, artist, Filter);
+		_Nontrivial  -> query_artists_count_by_rating(Filter, FRating,
+								Conn, Ctx)
+		end
 	end), Ctx};
-handle_call({query_artists, QList, Filter}, _From, Ctx) ->
+handle_call({query_artists, QList, Filter, FRating}, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
-		[[query_rating(parse_metadata(El, Ctx), Conn, Ctx)
-			|| El <- erlmpd:find(Conn, {land,
-					[{tagop, artist, eq, Artist}, Filter]})]
-		|| Artist <- QList]
+
+		filter_frating([[query_rating(parse_metadata(El, Ctx), Conn,
+					Ctx) || El <- erlmpd:find(Conn, {land,
+					[{tagop, artist, eq, Artist},
+					Filter]})] || Artist <- QList], FRating)
 	end), Ctx};
 handle_call(query_output, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
@@ -150,12 +156,13 @@ handle_call(query_search_limits, _From, Ctx) ->
 		AllYears = [string:to_integer(string:substr([Item], 1, 4)) ||
 					Item <- erlmpd:list(Conn, date),
 						string:length(Item) >= 4],
-		% TODO Query ratings as follows: Binary search 0 upwards up to max 100 and 100 downawards down to min. 0 / {ok, Conn2} = erlmpd:connect("172.17.0.1", 6600), erlmpd:command(Conn2, "list date").
+		% TODO SEARCHRATINGS - C4 - Query ratings as follows: Binary search 0 upwards up to max 100 and 100 downawards down to min. 0 / {ok, Conn2} = erlmpd:connect("172.17.0.1", 6600), erlmpd:command(Conn2, "list date").
 		#dbsearchlim{year=year_min_max(AllYears, 9999, 0),
 								rating={0, 100}}
 	end), Ctx};
 % returns Item or `false` if no matching value found here
-handle_call({search_by_artists, Direction, Artists, Query, Filter}, _Fr, Ctx) ->
+handle_call({search_by_artists, Direction, Artists, Query, Filter, FRating},
+								_From, Ctx) ->
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
 		% entry match Artist and (title contains Q || album contains Q)
 		Results = [maenmpc_erlmpd:to_dbsong(Ent, Ctx#spl.idx,
@@ -178,11 +185,10 @@ handle_call({search_by_artists, Direction, Artists, Query, Filter}, _Fr, Ctx) ->
 					{lnot, {tagop, album, contains, Query}}
 				]}}
 			]})],
-		case Results of
-		[]                           -> false;
-		[H|_T] when Direction =:=  1 -> H;
-		List   when Direction =:= -1 -> lists:last(List)
-		end
+		find_one_result(case Direction =:= 1 of
+				true  -> Results;
+				false -> lists:reverse(Results)
+				end, FRating, Conn, Ctx)
 	end), Ctx};
 handle_call({set_output, #dboutput{partition_name=Partition,
 				output_name=OutputName, output_id=OutputID}},
@@ -250,16 +256,6 @@ handle_call({rating, Direction, Song}, _From, Ctx) when Ctx#spl.is_rating ->
 handle_call(_Call, _From, Ctx) ->
 	{reply, ok, Ctx}.
 
-parse_metadata({error, Descr}, Ctx) ->
-	gen_server:cast(Ctx#spl.db, {mpd_assign_error, unknown, Descr}),
-	maenmpc_erlmpd:epsilon_song(Ctx#spl.len);
-parse_metadata(CurrentSong, Ctx) ->
-	case proplists:get_value(file, CurrentSong) of
-	undefined -> maenmpc_erlmpd:epsilon_song(Ctx#spl.len);
-	_ValidVal -> maenmpc_erlmpd:to_dbsong(CurrentSong,
-						Ctx#spl.idx, Ctx#spl.len)
-	end.
-
 query_rating(DBCMP, Conn, Ctx) ->
 	case DBCMP#dbsong.key =:= {<<>>, <<>>, <<>>} orelse
 							not Ctx#spl.is_rating of
@@ -268,22 +264,6 @@ query_rating(DBCMP, Conn, Ctx) ->
 						DBCMP#dbsong.uris), Conn)}
 	end.
 
-send_playing_info(Name, Status, Ctx) ->
-	ok = gen_server:cast(Ctx#spl.db, {db_playing,
-			[{x_maenmpc, Ctx#spl.current_song}|
-			[{x_maenmpc_name, Name}|Status]]}),
-	update_status(Status, Ctx).
-
-update_status(Status, Ctx) ->
-	Ctx#spl{mpd_volume  = proplists:get_value(volume,  Status, -1),
-		mpd_plength = proplists:get_value(playlistlength, Status, -1),
-		mpd_state   = proplists:get_value(state,   Status, undefined),
-		mpd_repeat  = proplists:get_value(repeat,  Status, false),
-		mpd_random  = proplists:get_value(random,  Status, false),
-		mpd_single  = proplists:get_value(single,  Status, false),
-		mpd_consume = proplists:get_value(consume, Status, false),
-		mpd_xfade   = proplists:get_value(xfade,   Status, 0)}.
-
 rating_for_uri(RatingURI, Conn) ->
 	case erlmpd:sticker_get(Conn, "song", binary_to_list(RatingURI),
 								"rating") of
@@ -291,6 +271,16 @@ rating_for_uri(RatingURI, Conn) ->
 	{error, _Any} -> ?RATING_UNRATED;
 	ProperRating  -> maenmpc_erlmpd:convert_rating(
 						list_to_integer(ProperRating))
+	end.
+
+parse_metadata({error, Descr}, Ctx) ->
+	gen_server:cast(Ctx#spl.db, {mpd_assign_error, unknown, Descr}),
+	maenmpc_erlmpd:epsilon_song(Ctx#spl.len);
+parse_metadata(CurrentSong, Ctx) ->
+	case proplists:get_value(file, CurrentSong) of
+	undefined -> maenmpc_erlmpd:epsilon_song(Ctx#spl.len);
+	_ValidVal -> maenmpc_erlmpd:to_dbsong(CurrentSong,
+						Ctx#spl.idx, Ctx#spl.len)
 	end.
 
 ui_simple_tx(stop, Conn, _Ctx) ->
@@ -316,6 +306,47 @@ ui_simple_tx(song_previous, Conn, _Ctx) ->
 	erlmpd:previous(Conn);
 ui_simple_tx(song_next, Conn, _Ctx) ->
 	erlmpd:next(Conn).
+
+update_status(Status, Ctx) ->
+	Ctx#spl{mpd_volume  = proplists:get_value(volume,  Status, -1),
+		mpd_plength = proplists:get_value(playlistlength, Status, -1),
+		mpd_state   = proplists:get_value(state,   Status, undefined),
+		mpd_repeat  = proplists:get_value(repeat,  Status, false),
+		mpd_random  = proplists:get_value(random,  Status, false),
+		mpd_single  = proplists:get_value(single,  Status, false),
+		mpd_consume = proplists:get_value(consume, Status, false),
+		mpd_xfade   = proplists:get_value(xfade,   Status, 0)}.
+
+% REM output format = [
+% 	[{'Artist',&lt;&lt;"Ace Of Base"&gt;&gt;},{songs,13},{playtime,2944}],
+% 	[{'Artist',&lt;&lt;"Adele"&gt;&gt;},{songs,1},{playtime,286}],
+% ]
+query_artists_count_by_rating(Filter, _FRating, Conn, _Ctx) ->
+	% TODO ASTAT NEED TO MAKE USE OF new erlmpd:sticker_find/7
+	erlmpd:count_group(Conn, artist, Filter).
+
+% TODO x SMALL PROBLEM: WHAT HAPPENS W/ RATING QUERY IN MULTI-PLAYER SCENARIO. IGNORE FOR NOW BUT I THINK IT WOULDN'T WORK RIGHT NOW...
+filter_frating(SongList, {none, none}) ->
+	SongList;
+filter_frating(SongList, {none, RMax1}) ->
+	[S || S <- SongList, S#dbsong.rating =< RMax1];
+filter_frating(SongList, {RMin1, none}) ->
+	[S || S <- SongList, S#dbsong.rating >= RMin1];
+filter_frating(SongList, {RMin2, RMax2}) ->
+	[S || S <- SongList, S#dbsong.rating =< RMax2 andalso
+						S#dbsong.rating >= RMin2].
+
+find_one_result([], _FRating, _Conn, _Ctx) -> false;
+find_one_result([Song|T], FRating, Conn, Ctx) ->
+	case filter_frating([query_rating(Song, Conn, Ctx)], FRating) of
+	[]          -> find_one_result(T, FRating, Conn, Ctx);
+	[RatedS|[]] -> RatedS
+	end.
+
+year_min_max([], Min, Max) ->
+	{Min, Max};
+year_min_max([{Year, _Suffix}|T], Min, Max) ->
+	year_min_max(T, min(Year, Min), max(Year, Max)).
 
 enqueue_after_current(Songs, Conn, Ctx) ->
 	lists:foldl(fun({Song, Offset}, Acc) ->
@@ -343,11 +374,6 @@ compute_and_transform_rating(_Ctx, Direction, OldRating) ->
 	OldRating + Delta < 0 orelse OldRating + Delta > 100 -> -1;
 	true -> (OldRating + Delta) div 10
 	end.
-
-year_min_max([], Min, Max) ->
-	{Min, Max};
-year_min_max([{Year, _Suffix}|T], Min, Max) ->
-	year_min_max(T, min(Year, Min), max(Year, Max)).
 
 handle_cast(Msg={mpd_assign_error, _MPDName, _Reason}, Ctx) ->
 	% bubble-up error
@@ -380,6 +406,11 @@ update_playing_info(Name, Conn, Ctx) ->
 					query_rating(CurrentSong, Conn, Ctx)}
 			end).
 
+send_playing_info(Name, Status, Ctx) ->
+	ok = gen_server:cast(Ctx#spl.db, {db_playing,
+			[{x_maenmpc, Ctx#spl.current_song}|
+			[{x_maenmpc_name, Name}|Status]]}),
+	update_status(Status, Ctx).
 
 handle_info(_Message,    Ctx)         -> {noreply, Ctx}.
 code_change(_OldVersion, Ctx, _Extra) -> {ok,      Ctx}.

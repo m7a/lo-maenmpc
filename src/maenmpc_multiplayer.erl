@@ -370,7 +370,8 @@ get_active_players(Ctx) ->
 
 query_all_artists(Ctx) ->
 	merge_artists([call_singleplayer(Name, {query_artists_count,
-		Ctx#mpl.current_filter}) || Name <- get_active_players(Ctx)]).
+		Ctx#mpl.current_filter,
+		Ctx#mpl.current_frating}) || Name <- get_active_players(Ctx)]).
 
 merge_artists(ArtistsRaw) ->
 	merge_by_criterion(ArtistsRaw,
@@ -430,7 +431,8 @@ query_list_artists_songs(QList, Ctx) ->
 	generate_album_dummies(merge_songs(lists:append(
 				[call_singleplayer(Name, {query_artists,
 					[AName || {AName, _Count} <- QList],
-					Ctx#mpl.current_filter})
+					Ctx#mpl.current_filter,
+					Ctx#mpl.current_frating})
 				|| Name <- get_active_players(Ctx)])),
 				{<<>>, <<>>}).
 
@@ -837,44 +839,46 @@ item_matches_query(#dbsong{key={Artist, Album, Title}}, Query) ->
 
 % TODO x search: With sufficient query length may attain better performance by handing the query in its entirety over to the database and only from the results determine what is “after” and “before” current cursor in search direction. However, this would incur jet another path of the implementation to be tested. Remain with the current (slower) implementation for now.
 search_list_outside(Direction, Ctx=#mpl{current_filter=Filter,
-				search_term=Query, current_list=#dbscroll{
+				current_frating=FRating, search_term=Query,
+				current_list=#dbscroll{
 				user_data={_Artists, ABeforeRev, AAfter}}}) ->
 	ActivePlayers = get_active_players(Ctx),
 	List1 = case Direction of
 		 1 -> AAfter;
 		-1 -> ABeforeRev
 		end,
-	case search_next_outside(Direction, List1, Query, Filter,
+	case search_next_outside(Direction, List1, Query, Filter, FRating,
 							ActivePlayers) of
 	false ->
 		List2 = lists:reverse(case Direction of
 			1  -> ABeforeRev;
 			-1 -> AAfter
 			end),
-		search_next_outside(Direction, List2, Query, Filter,
+		search_next_outside(Direction, List2, Query, Filter, FRating,
 							ActivePlayers);
 	SecondResultA ->
 		SecondResultA
 	end.
 
-search_next_outside(_Direction, [], _Query, _Filter, _ActivePlayers) ->
+search_next_outside(_Direction, [], _Query, _Filter, _FR, _ActivePlayers) ->
 	false;
 % Limit number of artists to query at once (avoid sending overly large queries
 % to MPD)
-search_next_outside(Direction, Artists, Query, Filter, ActivePlayers)
+search_next_outside(Direction, Artists, Query, Filter, FRating, ActivePlayers)
 			when length(Artists) > ?ARTIST_QUERY_CHUNK_SIZE ->
 	case search_next_outside(Direction, lists:sublist(Artists,
 				?ARTIST_QUERY_CHUNK_SIZE), Query,
-				Filter, ActivePlayers) of
+				Filter, FRating, ActivePlayers) of
 	false  -> search_next_outside(Direction, lists:sublist(Artists,
 				?ARTIST_QUERY_CHUNK_SIZE, length(Artists)),
-				Query, Filter, ActivePlayers);
+				Query, Filter, FRating, ActivePlayers);
 	Result -> Result
 	end;
-search_next_outside(Direction, Artists, Query, Filter, ActivePlayers) ->
+search_next_outside(Direction, Artists, Query, Filter, FRating,
+							ActivePlayers) ->
 	Results = [call_singleplayer(Name, {search_by_artists, Direction,
 				[Artist || {Artist, _Songs} <- Artists], Query,
-				Filter}) || Name <- ActivePlayers],
+				Filter, FRating}) || Name <- ActivePlayers],
 	case [Value || Value <- Results, Value =/= false] of
 	[] ->
 		false;
