@@ -94,10 +94,9 @@ handle_call({query_queue, ItemsRequested, CurrentQ}, _From, Ctx) ->
 	end),
 	{reply, NewQ, Ctx2};
 handle_call({query_artists_count, Filter, FRating}, _From, Ctx) ->
-	% TODO SEARCHRATINGS - C3 - Here we query all file names and then for each file name the metadata with Filter applied and if anything comes out we project to the Artists column ourselves
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
 		case FRating of
-		{none, none} -> erlmpd:count_group(Conn, artist, Filter);
+		{any, any} -> erlmpd:count_group(Conn, artist, Filter);
 		_Nontrivial  -> query_artists_count_by_rating(Filter, FRating,
 								Conn, Ctx)
 		end
@@ -317,20 +316,60 @@ update_status(Status, Ctx) ->
 		mpd_consume = proplists:get_value(consume, Status, false),
 		mpd_xfade   = proplists:get_value(xfade,   Status, 0)}.
 
-% REM output format = [
-% 	[{'Artist',&lt;&lt;"Ace Of Base"&gt;&gt;},{songs,13},{playtime,2944}],
-% 	[{'Artist',&lt;&lt;"Adele"&gt;&gt;},{songs,1},{playtime,286}],
-% ]
-query_artists_count_by_rating(Filter, _FRating, Conn, _Ctx) ->
-	% TODO ASTAT NEED TO MAKE USE OF new erlmpd:sticker_find/7
-	erlmpd:count_group(Conn, artist, Filter).
+query_artists_count_by_rating(Filter, {RMin, RMax}, Conn, _Ctx) ->
+	StartList = case RMin =:= any of
+		true ->
+			RMaxAdj = (RMax div 10) + 1,
+			erlmpd:sticker_find(Conn, "song", "", "rating", lt,
+						integer_to_list(RMaxAdj), []);
+		false ->
+			RMinAdj = max(0, (RMin div 10) - 1),
+			erlmpd:sticker_find(Conn, "song", "", "rating", gt,
+				integer_to_list(RMinAdj), [{sort, value_int}])
+		end,
+	AdjList = case RMin =/= any andalso RMax =/= any of
+		true ->
+			% Search until {rating,value} surpasses RMaxAdj value
+			RMaxAdj2 = RMax div 10,
+			lists:takewhile(fun(El) ->
+				Rating = binary_to_integer(proplists:get_value(
+								rating, El)),
+				Rating =< RMaxAdj2
+			end, StartList);
+		false ->
+			StartList
+		end,
+	RawResults = foldl_batch(fun(Batch, Map) ->
+			BatchFilter = {land, [{lnot, {land,
+				[{lnot, {fileeq, proplists:get_value(file, El)}}
+				|| El <- Batch]}}, Filter]},
+			lists:foldl(fun(Entry, IMap) ->
+				Artist = proplists:get_value('Artist', Entry),
+				Songs  = proplists:get_value(songs,    Entry),
+				maps:update_with(Artist,
+					fun(SO) -> SO + Songs end, Songs, IMap)
+			end, Map, erlmpd:count_group(Conn, artist, BatchFilter))
+		end, 20, maps:new(), AdjList),
+	% Now we have a map of artists and counts - should sort by artist!
+	% Then pack the whole thing up to look like the output of
+	% erlmpd:count_group
+	[[{'Artist', A}, {songs, C}] ||
+			{A, C} <- lists:keysort(1, maps:to_list(RawResults))].
+
+foldl_batch(_Callback, _BatchSize, Ctx0, []) ->
+	Ctx0;
+foldl_batch(Callback, BatchSize, Ctx0, List) when length(List) =< BatchSize ->
+	Callback(List, Ctx0);
+foldl_batch(Callback, BatchSize, Ctx0, List) ->
+	{Batch, LRem} = lists:split(BatchSize, List),
+	foldl_batch(Callback, BatchSize, Callback(Batch, Ctx0), LRem).
 
 % TODO x SMALL PROBLEM: WHAT HAPPENS W/ RATING QUERY IN MULTI-PLAYER SCENARIO. IGNORE FOR NOW BUT I THINK IT WOULDN'T WORK RIGHT NOW...
-filter_frating(SongList, {none, none}) ->
+filter_frating(SongList, {any, any}) ->
 	SongList;
-filter_frating(SongList, {none, RMax1}) ->
+filter_frating(SongList, {any, RMax1}) ->
 	[S || S <- SongList, S#dbsong.rating =< RMax1];
-filter_frating(SongList, {RMin1, none}) ->
+filter_frating(SongList, {RMin1, any}) ->
 	[S || S <- SongList, S#dbsong.rating >= RMin1];
 filter_frating(SongList, {RMin2, RMax2}) ->
 	[S || S <- SongList, S#dbsong.rating =< RMax2 andalso
