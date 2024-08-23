@@ -104,10 +104,10 @@ handle_call({query_artists_count, Filter, FRating}, _From, Ctx) ->
 handle_call({query_artists, QList, Filter, FRating}, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->
 
-		filter_frating([[query_rating(parse_metadata(El, Ctx), Conn,
+		[filter_frating([query_rating(parse_metadata(El, Ctx), Conn,
 					Ctx) || El <- erlmpd:find(Conn, {land,
 					[{tagop, artist, eq, Artist},
-					Filter]})] || Artist <- QList], FRating)
+					Filter]})], FRating) || Artist <- QList]
 	end), Ctx};
 handle_call(query_output, _From, Ctx) ->
 	{reply, maenmpc_sync_idle:run_transaction(Ctx#spl.syncidle, fun(Conn) ->

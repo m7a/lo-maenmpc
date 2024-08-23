@@ -1056,13 +1056,16 @@ filter_charclass_lt(Char) -> io_lib:format("[0-~w]",
 						[list_to_integer([Char]) - 1]).
 
 % align with maenmpc_erlmpd:format_Rating
+filter_rating("") -> any;
+filter_rating("*") -> 20;
+filter_rating("**") -> 40;
+filter_rating("***") -> 60;
+filter_rating("****") -> 80;
+filter_rating("*****") -> 100;
 filter_rating(RatingStr) ->
-	case string:length(RatingStr) of
-	0 ->
-		any;
-	_Non0 ->
-		% TODO PARSE HERE
-		20
+	case string:to_integer(RatingStr) of
+	{Num, []}   -> Num;
+	{error, _R} -> any % TODO x optionally generate error
 	end.
 
 handle_info(interrupt_idle, Ctx) ->
