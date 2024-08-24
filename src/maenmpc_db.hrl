@@ -44,4 +44,4 @@
 
 % Services management
 -record(dblog,     {id, msg, origin, timestamp}).
--record(dbservice, {is_online, key, label}).
+-record(dbservice, {key, is_online, label, node}).

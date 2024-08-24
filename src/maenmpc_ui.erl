@@ -115,7 +115,7 @@ wnd_static_draw(Ctx) ->
 	end, [
 		% Planned assignments: {3, "Tree"}, {7, "Info"}
 		{1, "Help"},   {2, "Queue"}, {3, ""}, {4, "List"},
-		{5, "Search"}, {6, "Radio"}, {7, ""}, {8, "Output"},
+		{5, "Search"}, {6, "Logs"}, {7, ""}, {8, "Output"},
 		{9, ""},       {0, "Quit"}
 	]),
 	cecho:wrefresh(Ctx#view.wnd_keys),
@@ -274,6 +274,9 @@ handle_cast({db_outputs, Outputs}, Ctx) when Ctx#view.page =:= output ->
 	{noreply, draw_outputs(Ctx, Outputs)};
 handle_cast({db_search_limits, L}, Ctx) when Ctx#view.page =:= search ->
 	{noreply, draw_search(Ctx, L)};
+handle_cast({db_services, Services}, Ctx) when Ctx#view.page =:= help orelse
+						Ctx#view.page =:= radio ->
+	{noreply, draw_services(Ctx, Services)};
 handle_cast(_Cast, Ctx) ->
 	{noreply, Ctx}.
 
@@ -333,7 +336,7 @@ priority_action(Ctx, Character) ->
 	?ceKEY_PGDOWN -> {cont, ui_scroll(Ctx, +current_page_height(Ctx))};
 	?ceKEY_PGUP   -> {cont, ui_scroll(Ctx, -current_page_height(Ctx))};
 	?ceKEY_TAB    -> {cont, ui_tab(Ctx)};
-	?ceKEY_F(1)   -> {stop, draw_page_help(Ctx#view{page=help})};
+	?ceKEY_F(1)   -> {stop, enter_page_help(Ctx)};
 	?ceKEY_F(2)   -> {SSSO, ui_request(Ctx#view{page=queue},
 				{ui_query, queue, main_height(Ctx)-1})};
 	% We may need to get updated data from leave_input_mode before entering
@@ -371,10 +374,9 @@ single_key_action(Ctx, Character) ->
 	$x               -> ui_request(Ctx, {ui_simple, toggle_xfade});
 	$<               -> ui_request(Ctx, {ui_simple, song_previous});
 	$>               -> ui_request(Ctx, {ui_simple, song_next});
-	$R               -> ui_request(Ctx, {ui_service, start, maenmpc_radio});
-	$T               -> ui_request(Ctx, {ui_service, stop,  maenmpc_radio});
-	$p               -> ui_request(Ctx, {ui_service, toggle,
-							maenmpc_podcast});
+	$R               -> ui_request(Ctx, {ui_service, start, radio});
+	$T               -> ui_request(Ctx, {ui_service, stop,  radio});
+	$p               -> ui_request(Ctx, {ui_service, toggle, podcast});
 	$k               -> ui_scroll(Ctx, -1);
 	$j               -> ui_scroll(Ctx, +1);
 	?ceKEY_HOME      -> ui_scroll(Ctx, top);
@@ -453,6 +455,9 @@ ui_tab(Ctx) ->
 	_Any ->
 		Ctx % ignore on other pages
 	end.
+
+enter_page_help(Ctx) ->
+	ui_request(draw_page_help(Ctx#view{page=help}), {ui_service, status}).
 
 draw_song_and_status(Ctx, Info) ->
 	% -- Song Info --
@@ -707,6 +712,33 @@ draw_sel(Ctx, S) ->
 			io_lib:format("playcount: ~w", [S#dbsong.playcount])),
 	cecho:attroff(Ctx#view.wnd_sel_card, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
 	cecho:wrefresh(Ctx#view.wnd_sel_card),
+	Ctx.
+
+draw_services(Ctx, Services) ->
+	cecho:werase(Ctx#view.wnd_sel),
+	draw_sel_border(Ctx),
+	cecho:attron(Ctx#view.wnd_sel, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
+	lists:foldl(fun(#dbservice{key=Key, is_online=Online, label=Label},
+									YPos) ->
+		cecho:mvwaddstr(Ctx#view.wnd_sel, YPos, 1, io_lib:format(
+								"~s ~s ~s", [
+			case Online of
+				true  -> "[x]";
+				false -> "[ ]"
+			end,
+			case Key of
+				radio when Online -> "T";
+				radio             -> "R";
+				podcast           -> "p";
+				scrobble          -> " ";
+				_Other            -> "?"
+			end,
+			Label
+		])),
+		YPos + 1
+	end, 1, Services),
+	cecho:attroff(Ctx#view.wnd_sel, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
+	cecho:wrefresh(Ctx#view.wnd_sel),
 	Ctx.
 
 current_page_height(Ctx) ->

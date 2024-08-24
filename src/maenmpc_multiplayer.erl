@@ -4,9 +4,11 @@
 -include_lib("maenmpc_db.hrl").
 -define(ARTIST_QUERY_CHUNK_SIZE, 20).
 
+% TODO x recommended refactor: split into two up to three components: One to purely track playback state and service states (useful also in CLI scenario), one for scrolling and optionally one for the rest?
+
 -record(mpl, {
 	ui, radio, alsa, mpd_list, mpd_active, mpd_ratings,
-	maloja, outputs,
+	maloja, outputs, services,
 	search_page, search_term,
 	current_song, current_queue, current_list, current_radio,
 	current_filter, current_frating
@@ -23,6 +25,11 @@ init([NotifyToUI, NotifyToRadio]) ->
 			lists:zip(MPDList, lists:seq(1, length(MPDList)))],
 	gen_server:cast(NotifyToUI, {db_cidx,
 				proplists:get_value(MPDFirst, MPDListIdx)}),
+	InitialSVC = [ #dbservice{key=radio, is_online=false,
+				label="Radio", node=maenmpc_radio},
+			#dbservice{key=podcast, is_online=false,
+				label="Podcast", node=maenmpc_podcast} ],
+	gen_server:cast(NotifyToUI, {db_services, InitialSVC}),
 	{ok, reset_views(#mpl{
 		ui              = NotifyToUI,
 		radio           = NotifyToRadio,
@@ -32,11 +39,11 @@ init([NotifyToUI, NotifyToRadio]) ->
 		mpd_ratings     = PrimaryRatings,
 		maloja          = maenmpc_maloja:conn(Maloja),
 		outputs         = none,
+		services        = InitialSVC,
 		search_term     = "",
 		current_song    = maenmpc_erlmpd:epsilon_song(length(MPDList)),
 		current_filter  = filter_reqne_const(),
-		% TODO THIS NEW FIELD MUST BE PASSED TO SINGLEPLAYER AND IF ITS VALUE IS /= any,any THE SINGLEPLAYER MUST GO AHEAD AND QUERY FILES BY THESE LIMITS AND THEN GENERATE A FILTER FOR INCLUSION IN THE FILTER EXPRESSION (IT MAY CONTAIN A SET OF FILES TO BEGIN WITH EVEN IF THIS MEANS A 600+ entries filter is generated, MPD does not give us much choice here...)
-		current_frating = {any, any} % rating filter...
+		current_frating = {any, any} % filter for ratings
 	})}.
 
 reset_views(Ctx) ->
@@ -100,7 +107,12 @@ handle_cast({ui_query, output}, Ctx) ->
 	{noreply, ui_query_outputs(Ctx)};
 handle_cast({ui_query, search_limits}, Ctx) ->
 	{noreply, ui_query_search_limits(Ctx)};
-handle_cast({ui_query, Action, ItemsRequested}, Ctx) ->
+handle_cast({ui_query, Action, ItemsRequested}, Ctx=#mpl{services=ServicesNow,
+								ui=UI}) ->
+	case Action of
+	radio -> ok = gen_server:cast(UI, {db_services, ServicesNow});
+	_Any  -> ok
+	end,
 	{noreply, ui_query(Ctx,
 			ui_items_requested(Ctx, Action, ItemsRequested))};
 handle_cast({ui_scroll, Action, Offset, ItemsRequested}, Ctx) ->
@@ -109,16 +121,29 @@ handle_cast({ui_scroll, Action, Offset, ItemsRequested}, Ctx) ->
 % We really only route it through here as the multiplayer knows about the
 % active MPD which is an important information for radio operation. Also,
 % we keep track of the state (on/off)
+handle_cast({ui_service, status}, Ctx=#mpl{services=ServicesNow,ui=UI}) ->
+	ok = gen_server:cast(UI, {db_services, ServicesNow}),
+	{noreply, Ctx};
 handle_cast({ui_service, start, Target}, Ctx) ->
-	ok = gen_server:cast(Target, {service_start, Ctx#mpl.mpd_active}),
-	{noreply, Ctx};
+	{noreply, edit_service(fun(Service=#dbservice{node=Node}, CtxI) ->
+		ok = gen_server:cast(Node, {service_start,
+							CtxI#mpl.mpd_active}),
+		{Service#dbservice{is_online=true}, CtxI}
+	end, Target, Ctx)};
 handle_cast({ui_service, stop, Target}, Ctx) ->
-	ok = gen_server:cast(Target, service_stop),
-	{noreply, Ctx};
-% TODO FOR NOW IT IS EQUIVALENT TO START WHICH MUST OF COURSE BE CHANGED!
+	{noreply, edit_service(fun(Service=#dbservice{node=Node}, CtxI) ->
+		ok = gen_server:cast(Node, service_stop),
+		{Service#dbservice{is_online=false}, CtxI}
+	end, Target, Ctx)};
 handle_cast({ui_service, toggle, Target}, Ctx) ->
-	ok = gen_server:cast(Target, {service_start, Ctx#mpl.mpd_active}),
-	{noreply, Ctx};
+	{noreply, edit_service(fun(Service=#dbservice{is_online=SO, node=Node},
+									CtxI) ->
+		ok = gen_server:cast(Node, case SO of
+				true  -> service_stop;
+				false -> {service_start, CtxI#mpl.mpd_active}
+				end),
+		{Service#dbservice{is_online=not SO}, CtxI}
+	end, Target, Ctx)};
 handle_cast(ui_radio_stop, Ctx) ->
 	ok = gen_server:cast(maenmpc_radio, service_stop),
 	{noreply, Ctx};
@@ -640,6 +665,16 @@ ui_scroll(Ctx, Offset, List=#dbscroll{coffset=COffset, qoffset=QOffset,
 		false -> COffset
 		end,
 	ui_query(Ctx, List#dbscroll{csel=NewCSel, coffset=NewCOffset}).
+
+edit_service(Callback, Service, Ctx0) ->
+	ServicesOld = Ctx0#mpl.services,
+	OldRec = lists:keyfind(Service, #dbservice.key, ServicesOld),
+	{NewRec, Ctx1} = Callback(OldRec, Ctx0),
+	ServicesNew = lists:keyreplace(Service, #dbservice.key, ServicesOld,
+									NewRec),
+	Ctx2 = Ctx1#mpl{services=ServicesNew},
+	ok = gen_server:cast(Ctx2#mpl.ui, {db_services, ServicesNew}),
+	Ctx2.
 
 ui_selected_action(output, play, Ctx) when Ctx#mpl.outputs =/= none ->
 	CtxPre = apply_player_change(Ctx),
