@@ -733,10 +733,13 @@ ui_selected_action(Page, Action, Ctx) ->
 						length(UseItems) =:= 1 ->
 			ok = call_singleplayer(Ctx#mpl.mpd_active,
 						{queue_delete, UseItems}),
+			NewLen = length(Cnt) - CSel - 1 - length(UseItems),
 			QueueNew = List#dbscroll{cnt=lists:sublist(Cnt, CSel) ++
-				lists:sublist(Cnt, CSel + 1 + length(UseItems),
-				length(Cnt) - CSel - 1 - length(UseItems)),
-				total=List#dbscroll.total - 1},
+					case NewLen > 0 of
+					true -> lists:sublist(Cnt, CSel + 1 +
+						length(UseItems), NewLen);
+					false -> []
+					end, total=List#dbscroll.total - 1},
 			% update UI and limits
 			ui_scroll(Ctx#mpl{current_queue=QueueNew}, 0, QueueNew);
 		rating_up when length(UseItems) =:= 1 ->
