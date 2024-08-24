@@ -6,11 +6,12 @@
 -record(rp, {mpd_list, talk_to, config, active, filelist}).
 
 init([TalkTo]) ->
-	{ok, Config} = application:get_env(maenmpc, podcast),
+	{ok, Config}  = application:get_env(maenmpc, podcast),
+	{ok, MPDList} = application:get_env(maenmpc, mpd),
 	timer:send_interval(maps:get(interval, Config), interrupt_check),
 	{ok, #rp{
 		% static wiring
-		mpd_list = application:get_env(maenmpc, mpd),
+		mpd_list = MPDList,
 		talk_to  = TalkTo,
 		config   = Config,
 		% dynamic state
@@ -106,10 +107,11 @@ handle_info(_Message, Ctx) ->
 	{noreply, Ctx}.
 
 podcast_process(Ctx=#rp{filelist=OldState}) ->
-	NewState = podcast_run_inner(Ctx),
+	Ctx2 = podcast_run_inner(Ctx),
+	NewState = Ctx2#rp.filelist,
 	case NewState -- OldState of
-	[]       -> Ctx; % do nothing
-	NewFiles -> play(lists:last(NewFiles), Ctx#rp{filelist=NewState})
+	[]       -> Ctx2; % do nothing
+	NewFiles -> play(lists:last(NewFiles), Ctx2)
 	end.
 
 % In theory we could also query multiplayer about the active player. However,
@@ -161,7 +163,7 @@ try_player(Name, Host, Port, File, Ctx) ->
 use_player(Name, Host, Port, File, Ctx = #rp{config = Config}) ->
 	% Patch connectivity information into podcast config (we pass it all
 	% down to play_inner).
-	PodcastConfig = [{ip, Host, Port}|proplists:get_value(Name,
+	PodcastConfig = [{ip, {Host, Port}}|proplists:get_value(Name,
 						maps:get(mpd, Config))],
 	case proplists:get_value(samplerate, PodcastConfig) of
 	undefined -> loudgain_then_cont(File, PodcastConfig, Ctx);
@@ -171,7 +173,7 @@ use_player(Name, Host, Port, File, Ctx = #rp{config = Config}) ->
 % 1.1 Check if input file /= flac -> ffmpeg
 to_flac_then_cont(File, PodcastConfig, Ctx) ->
 	case lists:suffix(".flac", File) of
-	true ->
+	false ->
 		Tmp1 = tmpnam("pre.flac"),
 		run_process_require_success(["ffmpeg", "-loglevel", "error",
 						"-i", File, Tmp1], Ctx, fun() ->
@@ -179,7 +181,7 @@ to_flac_then_cont(File, PodcastConfig, Ctx) ->
 			ok = file:delete(Tmp1),
 			RV
 		end);
-	false ->
+	true ->
 		resample_then_cont(File, PodcastConfig, Ctx)
 	end.
 
@@ -261,7 +263,7 @@ transfer_then_cont(File, PodcastConfig, Ctx) ->
 mpd_enqueue_then_fin(PodcastConfig, Ctx) ->
 	TargetMPD    = proplists:get_value(target_mpd, PodcastConfig),
 	{Host, Port} = proplists:get_value(ip, PodcastConfig),
-	log("enqueue ~s...", [TargetMPD]),
+	log(Ctx, io_lib:format("enqueue ~s...", [TargetMPD])),
 	{ok, Conn2} = erlmpd:connect(Host, Port),
 	case erlmpd:addid_relative(Conn2, TargetMPD, 0) of
 		{error, Err} -> log_multiline(Ctx, "enqueue error", Err), ok;
