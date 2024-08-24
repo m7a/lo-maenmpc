@@ -106,11 +106,21 @@ handle_cast({ui_query, Action, ItemsRequested}, Ctx) ->
 handle_cast({ui_scroll, Action, Offset, ItemsRequested}, Ctx) ->
 	{noreply, ui_scroll(Ctx, Offset,
 			ui_items_requested(Ctx, Action, ItemsRequested))};
-handle_cast(ui_radio_start, Ctx) ->
-	ok = gen_server:cast(maenmpc_radio, {radio_start, Ctx#mpl.mpd_active}),
+% We really only route it through here as the multiplayer knows about the
+% active MPD which is an important information for radio operation. Also,
+% we keep track of the state (on/off)
+handle_cast({ui_service, start, Target}, Ctx) ->
+	ok = gen_server:cast(Target, {service_start, Ctx#mpl.mpd_active}),
+	{noreply, Ctx};
+handle_cast({ui_service, stop, Target}, Ctx) ->
+	ok = gen_server:cast(Target, service_stop),
+	{noreply, Ctx};
+% TODO FOR NOW IT IS EQUIVALENT TO START WHICH MUST OF COURSE BE CHANGED!
+handle_cast({ui_service, toggle, Target}, Ctx) ->
+	ok = gen_server:cast(Target, {service_start, Ctx#mpl.mpd_active}),
 	{noreply, Ctx};
 handle_cast(ui_radio_stop, Ctx) ->
-	ok = gen_server:cast(maenmpc_radio, {radio_stop, Ctx#mpl.mpd_active}),
+	ok = gen_server:cast(maenmpc_radio, service_stop),
 	{noreply, Ctx};
 handle_cast({ui_selected, Screen, Action}, Ctx) ->
 	{noreply, ui_selected_action(Screen, Action, Ctx)};
@@ -124,9 +134,10 @@ handle_cast({radio_enqueue, DBSong}, Ctx=#mpl{current_radio=Radio}) ->
 	NewRadio = Radio#dbscroll{user_data=DBSong#dbsong.playlist_id},
 	transform_and_send_to_ui(Ctx, NewRadio, NewRadio#dbscroll.user_data),
 	{noreply, Ctx#mpl{current_radio=NewRadio}};
-handle_cast({radio_log, ID, Info}, Ctx=#mpl{current_radio=Radio}) ->
-	NewRadio = Radio#dbscroll{total=Radio#dbscroll.total + 1,
-				cnt=Radio#dbscroll.cnt ++ [{ID, Info}]},
+handle_cast(Log=#dblog{}, Ctx=#mpl{current_radio=Radio}) ->
+	NewID    = Radio#dbscroll.total + 1,
+	NewRadio = Radio#dbscroll{total=NewID, cnt=Radio#dbscroll.cnt ++
+							[Log#dblog{id=NewID}]},
 	transform_and_send_to_ui(Ctx, NewRadio, NewRadio#dbscroll.user_data),
 	{noreply, Ctx#mpl{current_radio=NewRadio}};
 handle_cast({ui_search, Direction, Page, String}, Ctx) ->

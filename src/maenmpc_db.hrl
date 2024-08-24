@@ -41,3 +41,7 @@
 -record(dbsearchlim, {year, rating}).
 -record(dbsearchin, {artist, album, title, format, ymin, ymax, rmin, rmax,
 			reqne}).
+
+% Services management
+-record(dblog,     {id, msg, origin, timestamp}).
+-record(dbservice, {is_online, key, label}).

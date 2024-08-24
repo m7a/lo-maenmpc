@@ -7,10 +7,10 @@
 % radio record
 -record(rr, {
 	% -- static parts --
-	% tbl: radio hash table
+	% tbl: radio hash table (config), talk_to: Log server (multiplayer)
 	primary_ratings, mpd_list, maloja, tbl, talk_to,
 	% -- dynamic parts --
-	log_id, active, schedule
+	active, schedule
 }).
 
 init([TalkTo]) ->
@@ -24,7 +24,6 @@ init([TalkTo]) ->
 		maloja          = maenmpc_maloja:conn(Maloja),
 		tbl             = Radio,
 		talk_to         = TalkTo,
-		log_id          = 0,
 		active          = false,
 		schedule        = []
 	}}.
@@ -32,9 +31,9 @@ init([TalkTo]) ->
 handle_call(_Call, _From, Ctx) ->
 	{ok, Ctx}.
 
-handle_cast({radio_start, MPDName}, Ctx) ->
+handle_cast({service_start, MPDName}, Ctx) ->
 	{noreply, radio_start(MPDName, Ctx)};
-handle_cast(radio_stop, Ctx) ->
+handle_cast(service_stop, Ctx) ->
 	{noreply, radio_stop(Ctx)};
 handle_cast({db_playing, _SongProp}, Ctx=#rr{active=false}) ->
 	{noreply, Ctx};
@@ -51,10 +50,10 @@ handle_cast({db_playing, SongProp}, Ctx=#rr{schedule=[{Key, _ID}|Tail]}) ->
 handle_cast(_Other, Ctx) ->
 	{noreply, Ctx}.
 
-log(Info, Ctx=#rr{log_id=ID}) ->
-	UseID = ID + 1,
-	ok = gen_server:cast(Ctx#rr.talk_to, {radio_log, UseID, Info}),
-	Ctx#rr{log_id=UseID}.
+% TODO CTX IS NEWLY R/O - NO NEED TO COPY THE CTX ALL OF THE TIME
+log(Msg, Ctx) ->
+	maenmpc_svc:log(Ctx#rr.talk_to, #dblog{msg=Msg, origin=radio}),
+	Ctx.
 
 radio_start(MPDName, Ctx0) when Ctx0#rr.active =:= false ->
 	Ctx1 = log("start radio", Ctx0#rr{active=MPDName}),
@@ -322,7 +321,8 @@ schedule_compute(Ctx0=#rr{tbl=Conf}) ->
 		% Yes, its inefficient here but other ways would be much more
 		% convoluted! Need to assign log ID to entry and keep it all
 		% in order because log has a side-effect!
-		CtxI1#rr{schedule=CtxI1#rr.schedule ++ [{ID, CtxI1#rr.log_id}]}
+		% TODO x NEWLY IT IS NO LONGER NECESSARY - CLEAN IT UP!
+		CtxI1#rr{schedule=CtxI1#rr.schedule ++ [{ID, 0}]}
 	end, Ctx8#rr{schedule=[]}, Schedule).
 
 schedule_construct_match(Rating) ->

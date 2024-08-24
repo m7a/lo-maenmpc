@@ -203,8 +203,7 @@ draw_page_help(Ctx) ->
 		 <<"T"/utf8>>,        <<"radio:  stop radio"/utf8>>],
 		[<<"Tab"/utf8>>,
 		 <<">"/utf8>>,        <<"next"/utf8>>,
-		%<<"p"/utf8>>,        <<"podcasts"/utf8>>, % TODO GIVEN THAT WE ALSO HAVE RADIO AND SCROBBLING "BACKGROUND SERVICES" WOULD IT PROBABLY MAKE SENSE TO ESTABLISH A DEDICATED TAB F9 (?) for this that could be used to enable/disable the BG services [or even chose the f6 radio and replace it along the way?]
-		 [],                  [],
+		 <<"p"/utf8>>,        <<"podcasts"/utf8>>,
 		 [],                  []],
 		[<<"F1..F10"/utf8>>,
 		 <<"<"/utf8>>,        <<"prev"/utf8>>,
@@ -372,8 +371,10 @@ single_key_action(Ctx, Character) ->
 	$x               -> ui_request(Ctx, {ui_simple, toggle_xfade});
 	$<               -> ui_request(Ctx, {ui_simple, song_previous});
 	$>               -> ui_request(Ctx, {ui_simple, song_next});
-	$R               -> ui_request(Ctx, ui_radio_start);
-	$T               -> ui_request(Ctx, ui_radio_stop);
+	$R               -> ui_request(Ctx, {ui_service, start, maenmpc_radio});
+	$T               -> ui_request(Ctx, {ui_service, stop,  maenmpc_radio});
+	$p               -> ui_request(Ctx, {ui_service, toggle,
+							maenmpc_podcast});
 	$k               -> ui_scroll(Ctx, -1);
 	$j               -> ui_scroll(Ctx, +1);
 	?ceKEY_HOME      -> ui_scroll(Ctx, top);
@@ -642,19 +643,26 @@ draw_result_line(Ctx, #dbscroll{type=list, csel=CSel}, {S, Y}, WT) ->
 	IsSel;
 draw_result_line(Ctx, #dbscroll{type=radio, csel=CSel,
 				user_data={CurrentLogID, _AbsoluteOffset}},
-		{{ID, Line}, Y}, WT) ->
+		{#dblog{id=ID, msg=Msg, timestamp=T, origin=Origin}, Y}, WT) ->
 	IsCurrent = CurrentLogID =:= ID,
 	IsSel = Y =:= CSel,
+	OriginCode =
+		case Origin of
+		radio    -> "R  ";
+		podcast  -> " p ";
+		scrobble -> "  S";
+		_Other   -> "___"
+		end,
 	Atts = case IsSel of
 		true  -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT_SEL);
 		false -> ?ceCOLOR_PAIR(?CPAIR_DEFAULT)
 		end bor bold_if(IsCurrent),
 	cecho:attron(Ctx#view.wnd_main, Atts),
-	cecho:mvwaddstr(Ctx#view.wnd_main, Y, 0, utf8pad(WT, Line)),
+	cecho:mvwaddstr(Ctx#view.wnd_main, Y, 0, utf8pad(WT,
+			io_lib:format("~s ~s ~s", [T, OriginCode, Msg]))),
 	cecho:attroff(Ctx#view.wnd_main, Atts),
 	% We must not permit the default logic to draw the “sel” info here
 	% [would be interesting wrt. viewing full info for truncated messages]
-	% TODO x FACTOR OUT SPECIAL RADIO MODE EVEN?
 	false.
 
 bold_if(true)  -> ?ceA_BOLD;
