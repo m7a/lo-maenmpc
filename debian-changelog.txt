@@ -1,3 +1,9 @@
+mdvl-maenmpc (1.0.2) stable; urgency=medium
+
+  * Update package to align with recent progress.
+
+ -- Ma_Sys.ma Linux-Fan <info@masysma.net>  Sun, 25 Aug 2024 16:13:23 +0200
+
 mdvl-maenmpc (1.0.1) stable; urgency=medium
 
   * Update package to include race condition bugfix

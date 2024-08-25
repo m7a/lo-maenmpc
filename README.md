@@ -33,11 +33,11 @@ consisting of two copies: One on the remote machine (offline resampled to the
 sample rate of the speakers) and one on the local machine.
 
 No existing program seemed to support this completely but the networked nature
-of the music player daemon
+of the Music Player Daemon
 [mpd(1)](https://manpages.debian.org/bookworm/mpd/mpd.1.en.html) was promising
 to provide a nice building block for such a setup. MPD does not come with native
 support for stars-based ratings and play counts. These features are instead
-addressed by various support programs. There are only few clients that support
+addressed by various support programs. There are only a few clients that support
 stars-based ratings.
 
 Here are some useful programs to consider for these purposes:
@@ -69,14 +69,13 @@ playback and one for the resampled collection to play back via AES67 -- e.g.
 ratings would only be accessible from the “primary” client (where the stickers
 database is saved). With Cantata I often fat-fignered replacing the current
 song with the one under the cursor -- I don't want the music to be interrputed
-mid-playing, clients should always insert at the end of the queue or right
+mid-playing. Clients should always insert at the end of the queue or right
 after the current song. With RompЯ I sometimes had volume control issues and
 for AES67 this is very critical because a sudden jump to 100% volume means 97dB
 from the speakers.
 
 Finally, I usually prefer to use terminal user interfaces. Hence I thought about
-creating my own terminal-based MPD client. Find out what became of it in the
-subsequent sections.
+creating my own terminal-based MPD client.
 
 Abstract
 ========
@@ -92,14 +91,14 @@ It features some uncommon and some very uncommon features:
    play counts. This is the same algorithm as implemented for
    [gmusicradio(32)](../32/gmusicradio.xhtml).
  * Support for news podcasts which are automatically enqueued into the
-   play list as a new episode appears.
+   playlist as a new episode appears.
  * Limited support for _multi-player_ operation, i.e. the client is able
    to connect to two MPD servers at once and make use of the metadata stored on
    the primary server even when playing through the second server as far as
-   the second one has copies of the same songs (works even with offline
-   re-sampled copies).
+   the second one has copies of the same songs. This works even with offline
+   resampled copies.
 
-![MAENMPC Screenshot of the Queue tab (F2)](maenmpc_att/scr_queue.png)
+![MAENMPC Screenshot of the Queue screen (F2)](maenmpc_att/scr_queue.png)
 
 Warning - Bugs and Complexity!
 ==============================
@@ -111,17 +110,17 @@ feature or simplify the code.
 
 It is thus advisable to prefer any other client and only turn to MAENMPC if you
 really need (some of) the unique features and can accept to live with some bugs
-in return. To help you with that, some nice clients are described in section
+in return. Some nice alternative clients to MAENMPC are described in section
 _Summary of Impressions from other Clients_.
 
 Finally, be aware that multiple programs need to be configured for MAENMPC to
 work as designed:
 
- * MPD server (version 0.24 or higher required)
+ * MPD (version 0.24 or higher required)
  * Scrobble server (Maloja is required)
  * Scrobble client (mpdscrobble is recommended)
+ * podget (for news podcasts)
  * SSH server (if podcasts are to be copied to a remote machine for playback)
- * Podget (for news podcasts)
 
 If you only want to try out the client, the minimum requirement is one running
 MPD server. Debian stable's version 0.23.12 can be used such as long as the
@@ -130,50 +129,66 @@ search form's numeric fields (ratings, years) are not used.
 Setup Instructions
 ==================
 
-The recommended setup is to download and install the dependencies and only then
-proceed to compile MAENMPC.
+The recommended setup is to download and install the dependencies, configure
+MAENMPC and then install it as a Debian package.
+
+As an alternative option which lends itself better to “trying out” and
+developing, the program can be compiled and run through `rebar3` as described
+in subsection _Compiling and using rebar3 on any OS_.
 
 ## Compile-Time Dependencies
 
 Install the compile-time dependencies:
 
-	aptitude install erlang-base erlang-jiffy erlang-inets rebar3 libncurses-dev
+	aptitude install ant devscripts erlang-base erlang-jiffy erlang-inets rebar3 libncurses-dev
+
+### Installation using Packages on Debian-based OS
 
 MAENMPC is written in Erlang. It makes use of libraries to draw its UI with
 NCurses (`cecho`) and to communicate with MPD (`erlmpd`). In order to work
-correctly with MAENMPC, both libraries had to be patched.
+correctly with MAENMPC, both libraries have to be patched.
+
+There are two way to go about this. If you are running a Debian-based system,
+compile and install the following packages according to their build instructions:
 
  1. Install [erlmpd(32)](../32/erlmpd.xhtml) -- see _MDPC 2.0 Integration_
- 2. Install cecho as follows:
-     * Clone the build instructions repository from
-       `git clone https://github.com/m7a/lp-cecho`
-     * Clone the Ma_Sys.ma patched version as follows:
+ 2. Install cecho using the build instructions at
+    <https://github.com/m7a/lp-cecho> as follows:
 
 ~~~
-mkdir x-artifacts
-cd x-artifacts
-git clone https://github.com/m7a/cecho.git
-cd cecho
-git checkout string_handling_unicode
-cd ..
-mv cecho cecho.git
-~~~
-
-     * Then proceed to build the package using `lp-cecho` and install it.
-
-~~~
+git clone https://github.com/m7a/lp-cecho
 cd lp-cecho
 ant package
 sudo dpkg -i ../*.deb
 ~~~
 
+### Compiling using rebar3 on any OS
+
+If you are running another OS, it may well be possible to build with `rebar3`
+alone. To do this, comment-in the lines in `rebar.config`:
+
+~~~{.erlang}
+{deps, [
+	{cecho, {git, "https://github.com/m7a/cecho.git", {branch, "masysma_patches"}}},
+	{erlmpd, {git, "https://github.com/m7a/bo-erlmpd.git", {branch, "master"}}}
+]}.
+~~~
+
+Then you may build all of the necessary dependencies and MAENMPC in one step
+using the following command:
+
+	rebar3 release
+
+After configuring (see next section), the following command may then be used to
+run MAENMPC: `./_build/default/rel/maenmpc/bin/maenmpc foreground`
+
 ## Configuring
 
 If you are going to install MAENMPC (may only be recommended after you are
 happy with your configuration), you need to setup the config file first. If
-you are using the `rebar3`-approach described under _Compiling_ you can
-alternatively change the configuration at any time simply be editing the
-file and restarting MAENMPC.
+you are using the `rebar3`-approach described under _Compiling using rebar3 on
+any OS_ you can alternatively change the configuration at any time simply be
+editing the file and restarting MAENMPC.
 
 The example configuration file supplied with the program shows what could be
 a productive setup. It is found under `config/sys.config`:
@@ -238,11 +253,11 @@ a productive setup. It is found under `config/sys.config`:
 
 ### Section `mpd`
 
-Here, you can specify one or two servers to connect to. The first item gives
-them a nickname that must be a valid erlang atom and is used to refer to the
-client throughout the remainder of the config. The `ip` tuple gives the hostname
-or IP and port to connect to. A typical configuration for a single server
-running locally would look as follows:
+Here, you can specify one or two servers to connect to. The first item is
+a nickname that must be a valid Erlang atom and is used to refer to the client
+throughout the remainder of the config. The `ip` tuple gives the hostname or
+IP and port to connect to. A typical configuration for a single server running
+locally would look as follows:
 
 ~~~{.erlang}
 	{mpd, [
@@ -253,11 +268,11 @@ running locally would look as follows:
 ### Section `alsa`
 
 Here, you can specify the path to your soundcard's `hw_params`. While playback
-is active, they are then be shown in the MAENMPC TUI to allow checking the
-hardware-side sample-rate at all times. This is useful to detect unexpected
-resampling. Have a look at `/proc/asound` on your system to find the name of
-your soundcard and replace `RAVENNA` with it. Say if on your setup it is `PCH`,
-change the config as follows:
+is active, hardware parameters are then shown in the MAENMPC TUI to allow
+checking the hardware-side sample-rate at all times. This is useful to detect
+unexpected resampling. Have a look at `/proc/asound` on your system to find
+the name of your soundcard and replace `RAVENNA` with it. Say if on your setup
+it is `PCH`, change the config as follows:
 
 ~~~{.erlang}
 	{alsa, "/proc/asound/PCH/pcm0p/sub0/hw_params"},
@@ -275,7 +290,7 @@ See [gmusicradio(32)](../32/gmusicradio.xhtml) for some explanation as to
 what they mean. Note that in `default_rating => 60` rating 60 corresponds to 6
 in the stickers database (3 stars) because MAENMPC internally continues to use
 the rating scheme from gmusicbrowser (0--100) but aligns the stickers database
-contents with the format from Cantata (max. 10).
+contents with the format from Cantata (0--10).
 
 The only peculiar setting here is `discard_prefix`. If you have some (single)
 directory tree in your music collection that you want to exclude completely
@@ -284,7 +299,7 @@ the example, there is a top-level `epic` directory which is excluded from the
 Radio playback.
 
 More fine-grained controi over radio playback is possible by assigning stars:
-Rating a song with 0 or 1 star excludes it from Radio playback, too.
+Rating a song with 0 or 1 star excludes it from radio playback, too.
 
 ### Section `maloja`
 
@@ -337,9 +352,8 @@ to convert a new podcast episode to the given sample rate. As many podcasts
 arrive in bad quality already, it may not make any difference and you could
 safely remove this option to let MPD do the resampling in an on-line fashion.
 
-When no conversion is needed, the file extension may also stay unchanged and
-the podcast file name should then be changed to `podcast.mp3` in the example
-here.
+When no conversion is needed, the file extension must also stay unchanged and
+the podcast file name should then be changed to e.g. `podcast.mp3`.
 
 ### Section `kernel`
 
@@ -357,18 +371,7 @@ any crashes of MAENMPC you may observe during runtime. Note that these logs
 can become very detailed in event of errors but are typically “silent” under
 regular operation.
 
-## Compiling
-
-Having fulfilled all dependencies, there are two ways to compile MAENMPC:
-
-### For Development and “trying it out”
-
-	rebar3 release
-
-After configuring, the following command may then be used to run MAENMPC
-`./_build/default/rel/maenmpc/bin/maenmpc foreground`
-
-### For Installation
+## Installation
 
 If your config is ready for installation, compile and install MAENMPC as
 a Debian package:
@@ -377,8 +380,8 @@ a Debian package:
 	sudo dpkg -i ../*.deb
 
 The advantage of the installed package is that you can use the command `maenmpc`
-to run it and terminal resizing is supported better (although it is still
-glitched sometimes...)
+to run it and terminal resizing support is improved, although it is still
+glitched sometimes...
 
 ## Run-Time Dependencies
 
@@ -430,7 +433,7 @@ to this screen by pressing [F1] for help at any time.
 ## TUI Areas
 
 The TUI is organized into multiple areas. Looking top to bottom you may notice
-multiple distinctive “rows” and two “columns” in the overall TUI layout.
+multiple distinctive rows and two columns in the overall TUI layout.
 
 Each of the resulting boxes has a defined meaning. The following chart symolizes
 the areas:
@@ -464,7 +467,7 @@ the areas:
 ================================================================================
 ~~~
 
-The ideas behind these areas are as follows
+The ideas behind these areas are explained in the following.
 
 ### Area A - Playing Song
 
@@ -497,7 +500,7 @@ This info is intended to always capture the information from the active player.
 ~~~
 
 Here, you can find three rows all in the same format:
-Samplerate:Bit Depth:Channels. If any of this information is not available it is
+Samplerate:Bit depth:Channels. If any of this information is not available it is
 shown as spaces or underscores. The meaning of the three lines is as follows:
 
  1. Song: Audio data assigned to the current song per MPD database.
@@ -534,7 +537,7 @@ The lines are as follows:
  3. P and S are constant mnemonics for “playback” and “state”. The symbol after
     P shows `|>` for playing back and `||` for paused or `[]` for stopped.
     The lines behind S can be replaced by characters while certain MPD
-    features are engaged e.g. `x` appears while cross-fading on song change is
+    features are active e.g. `x` appears while cross-fading on song change is
     enabled, `U` appears during a running MPD database update etc.
 
 ### Area D - Main
@@ -650,7 +653,7 @@ The key bindings have been inspired by the `ncmpc` MPD client.
  * Scroll down using down arrow or `j`
  * `h` and `l` are not supported yet but may in the future help navigation
    inside forms.
- * Use PageUp and PageDown to navigate lists more quickly
+ * Use Page-Up and Page-Down to navigate lists more quickly
  * Use Home (or `gg`) and End (or `G`) keys to jump to the first song or last
    song in a list respectively
  * Use the Tab key to jump around forms
@@ -678,7 +681,7 @@ The key bindings have been inspired by the `ncmpc` MPD client.
 These key bindings have in common that you may press them again to reverse their
 effect:
 
- * `P` used to toggle between play and pause
+ * `P` toggles between play and pause
  * `r` toggles MPD's repeat mode
  * `z` toggles MPD's random mode
  * `y` toggles MPD's single mode
@@ -825,7 +828,7 @@ The ouptut screen should allow you to switch MAENMPC between different outputs
 and may also be used to switch the active MPD server for MAENMPC to control.
 In theory it even supports partitions (if they have been created outside of
 MAENEMPC). In practice there may be many defects in this area as it hasn't been
-tested most recently.
+tested recently.
 
 In any case, navigate this screen using TAB and toggle the output assignments
 with SPACE.
@@ -866,6 +869,11 @@ Future Directions
    other clients like myMPD or Cantata.
  * Allow generation of playlists according to the Radio algorithm also in
    persistent formats like M3U for use with non-MAENMPC players.
+
+## Known Bugs
+
+ * There seems to be a minimum number in the “List” screen if this has fewer
+   entries than a single screen worth it may not be possible to navigate at all!
 
 Summary of Impressions from other Clients
 =========================================
@@ -909,8 +917,7 @@ Cantata supports podcasts but cannot automatically enqueue new episodes into the
 running playlists for automated news playback making this feature ill-suited to
 my use case.
 
-Cantata does not support play counts, but it can act as a scrobbling client if
-wanted.
+Cantata does not support play counts, but it can act as a scrobbling client..
 
 Overall, I like this client. Despite the fact that it has seen little
 maintenance over the recent years it still works fine even on a current Linux
@@ -920,8 +927,9 @@ being minimalist.
 ## RompЯ
 
 Rompr supports MPD and Mopidy servers, recommeding the usage in conjunction with
-Mopidy. In my tests, I used it with MPD where it worked well, too. It integrates
-features for ratings and play counts and tracks them in its own database.
+Mopidy. In my tests, I used it with MPD where it worked well, too. Rompr
+integrates features for ratings and play counts and tracks them in its own
+database.
 
 Rompr has tons of features and is actively maintained. With dedicated
 features for _Personalized Radio_ (cf. <https://fatg3erman.github.io/RompR/Personalised-Radio>)
@@ -930,11 +938,11 @@ it comes very close to support the features that are important to me.
 Unfortunately, it doesn't exactly match them to my use case but Rompr was a
 good intermediate choice before getting started with my own player.
 
-The documentation for Rompr is excellent because it is very user-centric and
-straight to the point: <https://fatg3erman.github.io/RompR/>.
+The documentation for Rompr is excellent, very user-centric and straight to
+the point: <https://fatg3erman.github.io/RompR/>.
 
 Similar to Cantata, Rompr automatically downloads and displays information about
-the currently playing artist.
+the currently playing artist and song.
 
 While the source code is available at no cost and contributions seem to be
 welcome, the license is unfortunately non-standard and not DFSG compliant
@@ -943,7 +951,7 @@ welcome, the license is unfortunately non-standard and not DFSG compliant
 I like this client, too. Despite a superficially similar feature set, there is
 quite the difference compared to Cantata in that Rompr has much more extra
 bells and whistles which can sometimes help but occasionally makes it run a
-little less predictable. E.g. on some occasions, when switching to a different
+little less predictably. E.g. on some occasions, when switching to a different
 MPD server, it would go on to reset the volume to 100% making me turn to the
 pause button rather quickly :)
 
@@ -971,13 +979,13 @@ of commonly used stickers across various MPD clients
 <https://github.com/jcorporation/mpd-stickers>.
 
 Overall, this may well be the most advanced and modern free software MPD client
-available. Had I known in advance that myMPD would come to support ratings
-stickers, I would have probably not embarked on creating my own client. Since
-MAENMPC was _feature complete_ with regard to the core features by the time
-I noticed the presence of the stars rating feature in myMPD and since I had
-already been using MAENMPC for months then, I spent the additional week
-completing the essential features on my client rather than exploring how to
-port my setup to myMPD.
+available. Had I known in advance that myMPD would come to support ratings in
+stickers, I would have probably avoided creating my own client. Since MAENMPC
+was _feature complete_ with regard to the core features by the time I noticed
+the presence of the stars rating feature in myMPD and since I had already been
+using MAENMPC for months then, I spent the additional week completing the
+essential features on my client rather than exploring how to port my setup to
+myMPD.
 
 myMPD provides a good fallback in case I ever want to get rid of my own player
 again and also seems to be a good choice to recommend to modern users in 2024.
@@ -985,26 +993,26 @@ again and also seems to be a good choice to recommend to modern users in 2024.
 ## Scrobblers
 
 Already in the first design drafts for my own player, I found the use of a
-scrobbler + scrobble server to provide a significant advantage over the plain
-storage of a play count as a sticker: In theory, a scrobble-based scheme lends
-itself well also to distributed scrobble collection. In practice, the existing
-scrobblers can only work if the scrobble server is available at all times.
+scrobbler + scrobble server to provide an advantage over the plain storage of
+a play count as a sticker: In theory, a scrobble-based scheme lends itself
+well also to distributed scrobble collection. In practice, the existing
+scrobblers only work if the scrobble server is available at all times.
 
 Two lightweight and common options are `mpdscribble` and `mpdscrobble`.
 
 Mpdscribble is more advanced because it may persist scrobbles and attempt to
 send them later if the server is not reachable. Unfortunately, this can also
 lead to loops if the scrobble was received successfully by the server once but
-this was not properly communicated to mpdscribble. It will then go on to
-attempt handing in the scrobble another time, causing it to be rejected for
-“already existent” which in turn causes mpdscribble to re-try sending that
+this was not properly communicated to mpdscribble. It then goes on to attempt
+sending the scrobble another time, causing it to be rejected for
+“already existent” which in turn causes mpdscribble to retry sending that
 scorbble...
 
-Mpdscrobble is designed in a much easier, stateless way: It does not at all
-cache the relevant metadata anywhere except in RAM meaning that you always start
-from a clean slate. In theory, this is worse but in practice this works much
-better. Also, mpdscrobble is less than 1000 LOC of Python making it a good
-entry point in studying how an own scrobbler could be created.
+Mpdscrobble is designed in an easier, stateless way: It does not at all cache
+the relevant metadata anywhere except in RAM meaning that you always start from
+a clean slate. In theory, this is worse but in practice this works better. Also,
+mpdscrobble is less than 1000 LOC of Python making it a good entry point for
+studying how an own scrobbler could be created.
 
 See Also
 ========

@@ -31,16 +31,21 @@ query_playcount(Trackartist, Title, {URL, Key}) ->
 			uri_string:quote(Trackartist),
 			uri_string:quote(Title)
 		]))),
-	{ok, {_Status, _Headers, InfoRaw}} = httpc:request(Query),
-	Map = jiffy:decode(InfoRaw, [return_maps]),
-	case maps:get(<<"scrobbles">>, Map, -1) of
-	-1 ->
-		EDsc = maps:get(<<"error">>, Map, unknown),
-		case is_map(EDsc) andalso maps:get(<<"type">>, EDsc, unknown)
-					=:= <<"entity_does_not_exist">> of
-			true  -> {ok, 0};
-			false -> {error, EDsc}
-		end;
-	Value1 ->
-		{ok, Value1}
+	case httpc:request(Query) of
+	{error, EDesc} ->
+		{error, EDesc};
+	{ok, {_Status, _Headers, InfoRaw}} ->
+		Map = jiffy:decode(InfoRaw, [return_maps]),
+		case maps:get(<<"scrobbles">>, Map, -1) of
+		-1 ->
+			EDsc = maps:get(<<"error">>, Map, unknown),
+			case is_map(EDsc) andalso maps:get(<<"type">>, EDsc,
+						unknown) =:=
+						<<"entity_does_not_exist">> of
+				true  -> {ok, 0};
+				false -> {error, EDsc}
+			end;
+		Value1 ->
+			{ok, Value1}
+		end
 	end.
