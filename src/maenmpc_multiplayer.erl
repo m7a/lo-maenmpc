@@ -7,14 +7,14 @@
 % TODO x recommended refactor: split into two up to three components: One to purely track playback state and service states (useful also in CLI scenario), one for scrolling and optionally one for the rest?
 
 -record(mpl, {
-	ui, radio, alsa, mpd_list, mpd_active, mpd_ratings,
+	ui, radio, scrobble, alsa, mpd_list, mpd_active, mpd_ratings,
 	maloja, outputs, services,
 	search_page, search_term,
 	current_song, current_queue, current_list, current_radio,
 	current_filter, current_frating
 }).
 
-init([NotifyToUI, NotifyToRadio]) ->
+init([NotifyToUI, NotifyToRadio, NotifyToScrobble]) ->
 	{ok, PrimaryRatings} = application:get_env(maenmpc, primary_ratings),
 	{ok, MPDList}        = application:get_env(maenmpc, mpd),
 	{ok, ALSAHWInfo}     = application:get_env(maenmpc, alsa),
@@ -25,14 +25,19 @@ init([NotifyToUI, NotifyToRadio]) ->
 			lists:zip(MPDList, lists:seq(1, length(MPDList)))],
 	gen_server:cast(NotifyToUI, {db_cidx,
 				proplists:get_value(MPDFirst, MPDListIdx)}),
+	% TODO x maybe query is a ctive? Then the scrobble service could also print some logs...
+	ScrobbleActive = proplists:get_value(scrobble_send, Maloja, false),
 	InitialSVC = [ #dbservice{key=radio, is_online=false,
 				label="Radio", node=maenmpc_radio},
 			#dbservice{key=podcast, is_online=false,
-				label="Podcast", node=maenmpc_podcast} ],
+				label="Podcast", node=maenmpc_podcast},
+			#dbservice{key=scrobble, is_online=ScrobbleActive,
+				label="Scrobble", node=maenmpc_scrobble} ],
 	gen_server:cast(NotifyToUI, {db_services, InitialSVC}),
 	{ok, reset_views(#mpl{
 		ui              = NotifyToUI,
 		radio           = NotifyToRadio,
+		scrobble        = NotifyToScrobble,
 		alsa            = ALSAHWInfo,
 		mpd_list        = MPDListIdx, % [{name, idx}]
 		mpd_active      = MPDFirst,
@@ -83,6 +88,7 @@ handle_cast({db_playing, Info}, Ctx) ->
 			{NCtx, replace_song_info(Info, NewSong)}
 		end,
 		gen_server:cast(Ctx#mpl.radio, {db_playing, SendToUI}),
+		gen_server:cast(Ctx#mpl.scrobble, {db_playing, SendToUI}),
 		gen_server:cast(Ctx#mpl.ui, {db_playing,
 			[{x_maenmpc_alsa, query_alsa(Ctx#mpl.alsa)}|SendToUI]}),
 		NewCtx;

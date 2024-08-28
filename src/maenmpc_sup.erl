@@ -23,10 +23,14 @@ init([_CLIParams]) ->
 		#{id => maenmpc_podcast, start => {gen_server, start_link,
 				[{local, maenmpc_podcast},
 				maenmpc_podcast, [maenmpc_multiplayer], []]}},
+		#{id => maenmpc_scrobble, start => {gen_server, start_link,
+				[{local, maenmpc_scrobble},
+				maenmpc_scrobble, [maenmpc_multiplayer], []]}},
 		#{id => maenmpc_multiplayer, start => {gen_server, start_link,
 				[{local, maenmpc_multiplayer},
 				maenmpc_multiplayer,
-				[maenmpc_ui, maenmpc_radio], []]}}
+				[maenmpc_ui, maenmpc_radio, maenmpc_scrobble],
+				[]]}}
 	] ++ lists:flatten([
 		generate_dynamic_entries(Name, Config, Idx, Len, PrimaryRatings)
 	||
