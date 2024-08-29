@@ -25,7 +25,6 @@ init([NotifyToUI, NotifyToRadio, NotifyToScrobble]) ->
 			lists:zip(MPDList, lists:seq(1, length(MPDList)))],
 	gen_server:cast(NotifyToUI, {db_cidx,
 				proplists:get_value(MPDFirst, MPDListIdx)}),
-	% TODO x maybe query is a ctive? Then the scrobble service could also print some logs...
 	ScrobbleActive = proplists:get_value(scrobble_send, Maloja, false),
 	InitialSVC = [ #dbservice{key=radio, is_online=false,
 				label="Radio", node=maenmpc_radio},

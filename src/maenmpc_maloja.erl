@@ -1,5 +1,5 @@
 -module(maenmpc_maloja).
--export([conn/1, foldl_scrobbles/3, query_playcount/3]).
+-export([conn/1, foldl_scrobbles/3, query_playcount/3, scrobble/2]).
 
 conn(MalojaConf) ->
 	{proplists:get_value(url, MalojaConf, none),
@@ -48,4 +48,30 @@ query_playcount(Trackartist, Title, {URL, Key}) ->
 		Value1 ->
 			{ok, Value1}
 		end
+	end.
+
+scrobble(Scrobble, {URL, Key}) ->
+	JSON = jiffy:encode(maps:put(key, list_to_binary(Key), Scrobble)),
+	Endpoint = binary_to_list(iolist_to_binary(io_lib:format(
+						"~s/newscrobble", [URL]))),
+	case httpc:request(post, {Endpoint, [], "application/json", JSON},
+					[], [{full_result, false},
+					{body_format, binary}]) of
+	{ok, {StatusCode, Body}} ->
+		% Example response: {"status": "success", "desc":
+		% "The scrobble is present in the database.", "track": {},
+		% "warnings": [{"type": "scrobble_exists", "value": null,
+		% "desc": "This scrobble exists in the database (same
+		% timestamp and track). The submitted scrobble was not
+		% added."}]}
+		case (StatusCode div 200) == 1 of
+		true  ->
+			case string:find("scrobble_exists", Body) of
+			nomatch -> ok;
+			_Match  -> ok_exists
+			end;
+		false -> {error, Body}
+		end;
+	{error, Reason} ->
+		{error, io_lib:format("~w", [Reason])}
 	end.
