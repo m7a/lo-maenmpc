@@ -55,22 +55,29 @@ scrobble(Scrobble, {URL, Key}) ->
 	Endpoint = binary_to_list(iolist_to_binary(io_lib:format(
 						"~s/newscrobble", [URL]))),
 	case httpc:request(post, {Endpoint, [], "application/json", JSON},
-					[], [{full_result, false},
-					{body_format, binary}]) of
+			[], [{full_result, false}, {body_format, binary}]) of
 	{ok, {StatusCode, Body}} ->
-		% Example response: {"status": "success", "desc":
-		% "The scrobble is present in the database.", "track": {},
-		% "warnings": [{"type": "scrobble_exists", "value": null,
-		% "desc": "This scrobble exists in the database (same
-		% timestamp and track). The submitted scrobble was not
-		% added."}]}
-		case (StatusCode div 200) == 1 of
-		true  ->
-			case string:find("scrobble_exists", Body) of
-			nomatch -> ok;
-			_Match  -> ok_exists
+		Response = jiffy:decode(Body, [return_maps]),
+		case maps:get(<<"status">>, Response) of
+		<<"success">> when (StatusCode div 200) == 1 ->
+			case maps:get(<<"warnings">>, Response, no_warning) of
+			no_warning ->
+				ok;
+			[OneWarning] ->
+				case maps:get(<<"type">>, OneWarning) of
+				<<"scrobble_exists">> -> ok_exists;
+				_OtherWarning         ->
+					{error, io_lib:format(
+						"Unknown warning: ~w",
+						[OneWarning])}
+				end;
+			MultipleWarnings ->
+				{error, io_lib:format("Multiple warnings: ~w",
+							[MultipleWarnings])}
 			end;
-		false -> {error, Body}
+		_Other ->
+			{error, io_lib:format("Status=~w, Response=~s",
+							[StatusCode, Body])}
 		end;
 	{error, Reason} ->
 		{error, io_lib:format("~w", [Reason])}

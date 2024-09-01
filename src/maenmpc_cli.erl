@@ -607,6 +607,7 @@ import_playcounts_to_scrobbles(Maloja) ->
 %            "{\"status\": \"success\", \"desc\": \"The scrobble [...].\",
 %              \"track\": {}, \"warnings\": [{\"type\": \"scrobble_exists\",
 %              \"value\": null, \"desc\": \"This scrobble [...].\"}]}"}
+% TODO LARGELY REDUNDANT W/ maenmpc_maloja:scrobble
 generate_scrobble(Endpoint, KeyParam, Song, Nth) ->
 	% -- Virtual Scrobble Timestamp --
 	% Since GMUSICBROWSER does not store the time when the song was played
