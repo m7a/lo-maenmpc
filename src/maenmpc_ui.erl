@@ -503,7 +503,7 @@ draw_song_and_status(Ctx, Info) ->
 	cecho:mvwaddstr(Ctx#view.wnd_card, 0, 1, BitrateCurrent),
 	cecho:mvwaddstr(Ctx#view.wnd_card, 1, 1, BitrateOther),
 	cecho:mvwaddstr(Ctx#view.wnd_card, 2, 1, BitrateCard),
-	cecho:mvwaddstr(Ctx#view.wnd_card, 0, 21, "MAENMPC 0.1.0"),
+	cecho:mvwaddstr(Ctx#view.wnd_card, 0, 21, "MAENMPC 0.1.1"),
 	cecho:mvwaddstr(Ctx#view.wnd_card, 1, 21, Volume),
 	cecho:mvwaddstr(Ctx#view.wnd_card, 2, 21, InfoChars),
 	cecho:attroff(Ctx#view.wnd_card, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),

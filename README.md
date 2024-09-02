@@ -75,7 +75,10 @@ for AES67 this is very critical because a sudden jump to 100% volume means 97dB
 from the speakers.
 
 Finally, I usually prefer to use terminal user interfaces. Hence I thought about
-creating my own terminal-based MPD client.
+creating my own terminal-based MPD client. This was eased by the fact that MPD
+is designed to permit multiple clients to control it simultaneously. I could
+stay with one of the existent clients and build features into my client on the
+go and very early have it running along the other (more mature) client already.
 
 Abstract
 ========
@@ -87,6 +90,7 @@ It features some uncommon and some very uncommon features:
    This includes searching by ratings and having the ratings displayed
    in all overviews and song listings.
  * Support for play counts by querying the Maloja API.
+ * Support for scrobbling to a Maloja server.
  * Support for generating “radio-like” playlists based on the ratings and
    play counts. This is the same algorithm as implemented for
    [gmusicradio(32)](../32/gmusicradio.xhtml).
@@ -117,9 +121,8 @@ Finally, be aware that multiple programs need to be configured for MAENMPC to
 work as designed:
 
  * MPD (version 0.24 or higher required)
- * Scrobble server (Maloja is required)
- * Scrobble client (mpdscrobble is recommended)
- * podget (for news podcasts)
+ * Scrobble server (Maloja is required to use playcounts with MAENMPC)
+ * podget (optional for news podcasts)
  * SSH server (if podcasts are to be copied to a remote machine for playback)
 
 If you only want to try out the client, the minimum requirement is one running
@@ -211,7 +214,10 @@ a productive setup. It is found under `config/sys.config`:
 	}},
 	{maloja, [
 		{url, "http://127.0.0.1:42010/apis/mlj_1"},
-		{key, "NKPCt5Ej7vkilkRtx5EubIa4fG78xhPEbcljU49rHVjDUgV5WmEHl3VDHjZFDrQK"}
+		{key, "NKPCt5Ej7vkilkRtx5EubIa4fG78xhPEbcljU49rHVjDUgV5WmEHl3VDHjZFDrQK"},
+		{primary_albumart, local},
+		{scrobble_send, true},
+		{scrobble_file, "scrobble_test.txt"}
 	]},
 	{podcast, #{
 		conf     => "/data/programs/music2/supplementary/news/conf",
@@ -307,6 +313,19 @@ Here, the Maloja URL for accessing the Maloja API and the associated API key
 need to be configured. The `key` value _must_ be replaced by the value
 applicable to your Maloja installation.
 
+In order to enable scrobbling, the following options may be used
+
+ * `primary_albumart` configures which MPD server to query albumart from. Note
+   that to have this accepted by Maloja, you must currently use a patched
+   version of Maloja which supports the `image` key in scrobbles. Leave this
+   key out to not scrobble album art and work with a stock Maloja instance.
+ * `scrobble_send` enables the scrobbling feature. Remove this line or set it
+   to `false` to disable scrobbling.
+ * `scrobble_file` provides a file to store scrobbles to in event that they
+   could not be sent to Maloja. The file consists of one scrobble per line
+   and could later be scrobbled with a suitable `curl` POST request to Maloja
+   for each line.
+
 ### Section `podcast`
 
 In case you don't want to use the podcast feature, you can leave this section
@@ -400,7 +419,7 @@ TUI Usage Instructions
 
 ~~~
 ================================================================================
- Corey Hart, 2005: Die Hit-Giganten: Pop &  | song:   44100:16:2  MAENMPC 0.1.0
+ Corey Hart, 2005: Die Hit-Giganten: Pop &  | song:   44100:16:2  MAENMPC 0.1.1
  17 - Sunglasses at Night             - - - | other:              Volume n/a
  ###########_________________ [02:07|05:15] | ALSA:   88200:__:2  P |> S ------
 --------------------------------------------+-----------------------------------
@@ -420,7 +439,7 @@ TUI Usage Instructions
 ----------------------------------------------------------+---------------------
  [x] T Radio                                              |
  [x] p Podcast                                            |
-                                                          |
+ [x]   Scrobble                                           |
 ----------------------------------------------------------+---------------------
 
  1Help   2Queue  3       4List   5Search 6Logs   7       8Output 9       0Quit 
@@ -562,19 +581,21 @@ e.g.:
 
 ~~~
 ----------------------------------------------------------
- [x] T Radio                                              
- [x] p Podcast                                            
-                                                          
+ [x] T Radio
+ [x] p Podcast
+ [x]   Scrobble
 ----------------------------------------------------------
 ~~~
 
-Each line indicates one _service_. Here, we have two services _Radio_ and
-_Podcast_ available. The reading of each line is as follows:
+Each line indicates one _service_. Here, we have three services _Radio_,
+_Podcast_ and _Scrobble_ available. The reading of each line is as follows:
 
  * The first part `[x]` or `[ ]` shows if this service is enabled. When
    `x` is present, it is enabled, When `x` is absent, it is disabled.
  * The second part (e.g. `T`) shows a key that you could press to change the
-   state of the service (between active/inactive).
+   state of the service (between active/inactive). Note that since the
+   _Scrobble_ service doesn't have any key assigned, it cannot be changed
+   at run-time and nees to be enabled or disabled via the config file.
  * The third part shows a label what service is shown here.
 
 Beware that when using any screen that doesn't make use of _Area F_, it may just
@@ -586,7 +607,7 @@ misleading!
 ~~~
 +---------------------
 | song:   48000:24:2
-| other:            
+| other:
 | playcount: 3
 +---------------------
 ~~~
@@ -790,7 +811,7 @@ the stickers) these may be to slow to execute with large music collections.
 
 ~~~
 ================================================================================
- Katy Perry, 2012: Teenage Dream: The Compl | song:   44100:16:2  MAENMPC 0.1.0
+ Katy Perry, 2012: Teenage Dream: The Compl | song:   44100:16:2  MAENMPC 0.1.1
  13 - The One That Got Away (acoustic **... | other:              Volume n/a
  ####################________ [03:12|04:20] | ALSA:   88200:__:2  P |> S ------
 --------------------------------------------+-----------------------------------
@@ -810,17 +831,18 @@ the stickers) these may be to slow to execute with large music collections.
 ----------------------------------------------------------+---------------------
  [x] T Radio                                              |
  [x] p Podcast                                            |
-                                                          |
+ [x]   Scrobble                                           |
 ----------------------------------------------------------+---------------------
 
  1Help   2Queue  3       4List   5Search 6Logs   7       8Output 9       0Quit 
 ================================================================================
 ~~~
 
-The logs screen shows information printed by the background services (Radio and
-Podcast) which are identified by the markers `R` and `p` here. All log-lines
-are prefixed by a timestamp in UTC. The contents of this screen are mostly
-useful to check if indeed, the respective services are running correctly.
+The logs screen shows information printed by the background services (Radio,
+Podcast and Scrobble) which are identified by the markers `R`, `p` and `S` here.
+All log-lines are prefixed by a timestamp in UTC. The contents of this screen
+are mostly useful to check if indeed, the respective services are running
+correctly.
 
 ## [F8] - Outputs
 
@@ -860,7 +882,6 @@ Future Directions
    increase stability.
  * Improve performance. Some easy optimizations like reducing the number of
    metadata tags queried from MPD are still available!
- * Integrate mpdscrobble functionality as a service.
  * Integrate a scrobble-to-file (and import scroble from file) functionality
    that may be used on satellite machines without access to the central Maloja
    instance.
@@ -1013,6 +1034,10 @@ the relevant metadata anywhere except in RAM meaning that you always start from
 a clean slate. In theory, this is worse but in practice this works better. Also,
 mpdscrobble is less than 1000 LOC of Python making it a good entry point for
 studying how an own scrobbler could be created.
+
+Since version 0.1.1, MAENMPC has an integrated scorbbler feature which operates
+very similar to the one implemented by `mpdscrobble` making the use of an
+external program for the purpose unnecessary.
 
 See Also
 ========
