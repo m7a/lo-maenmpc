@@ -105,19 +105,21 @@ add_album_art(Payload, Ctx = #sc{calbumart={IDX, ConnInfo},
 	{error, Error} ->
 		log(io_lib:format("Failed read picture: ~w", [Error]), Ctx),
 		Payload;
-	{unknown, _Binary} ->
-		log(io_lib:format("Unknown image format for ~s", [URI]), Ctx),
-		Payload;
-	{Type, Binary} ->
+	{unknown, Binary} ->
 		case iolist_size(Binary) of
 		0 ->
 			log(io_lib:format("No picture found for ~s", [URI]),
 									Ctx),
 			Payload;
 		_Other ->
-			maps:put(image, iolist_to_binary([<<"data:">>,Type,
-				<<";base64,">>,base64:encode(Binary)]), Payload)
-		end
+			log(io_lib:format("Unknown image format for ~s", [URI]),
+									Ctx),
+			Payload
+		end;
+	{Type, Binary} ->
+		maps:put(image, iolist_to_binary([<<"data:">>,Type,
+			<<";base64,">>,
+			base64:encode(iolist_to_binary(Binary))]), Payload)
 	end.
 
 scrobble_to_file(Payload, File, Ctx) ->

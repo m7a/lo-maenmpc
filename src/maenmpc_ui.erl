@@ -264,8 +264,12 @@ handle_cast({db_info, Message}, Ctx) ->
 	{noreply, display_message(Ctx, Message)};
 handle_cast({db_playing, SongAndStatus}, Ctx) ->
 	{noreply, case proplists:get_value(error, SongAndStatus) of
-		undefined -> draw_song_and_status(Ctx, SongAndStatus);
-		ErrorInfo -> display_error(Ctx, io_lib:format(
+	undefined ->
+		draw_song_and_status(Ctx, SongAndStatus);
+	ErrorInfo ->
+		% redundant error display for full message info
+		error_logger:info_msg("status query error ~p", [ErrorInfo]),
+		display_error(Ctx, io_lib:format(
 					"status query error: ~w", [ErrorInfo]))
 	end};
 handle_cast({db_results, L}, Ctx) when L#dbscroll.type =:= Ctx#view.page ->
