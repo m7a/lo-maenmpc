@@ -10,393 +10,59 @@
 % to exec to app
 run(MPDList, PrimaryRatings, Maloja, RadioConf) ->
 	case init:get_argument(help) of
-	{ok, _Any} -> usage();
+	{ok, _Any} ->
+		usage();
 	_NoHelpArg ->
-		case init:get_argument(radio) of
-		{ok, SelectedMPD} ->
-			case SelectedMPD of
-			[[]] ->
-				[{MPDName, _Config}|_Rest] = MPDList,
-				radio(MPDList, PrimaryRatings, Maloja, MPDName,
-					RadioConf);
-			[[MPDName]] ->
-				radio(MPDList, PrimaryRatings, Maloja,
-					list_to_atom(MPDName), RadioConf);
-			_Other ->
-				io:fwrite(
-				"Multiple MPD names are not supported.~n")
-			end;
-		_NoRadioArg ->
-			case init:get_argument(gmbrc) of
-			{ok, [[Path]]} -> use_gmbrc(MPDList, PrimaryRatings,
-								Maloja, Path);
-			_NoGMBRCArg    -> {next, []}
+		case init:get_argument(gmbrc) of
+		{ok, [[Path]]} ->
+			use_gmbrc(MPDList, PrimaryRatings, Maloja, Path);
+		_NoGMBRCArg ->
+			UseServer = case init:get_argument(server) of
+				error ->
+					[{MPDName1, _Config}|_Rest] = MPDList,
+					MPDName1;
+				[[]] ->
+					[{MPDName1, _Config}|_Rest] = MPDList,
+					MPDName1;
+				[[MPDName]] ->
+					list_to_atom(MPDName);
+				_Other ->
+					io:fwrite("Multiple MPD names are " ++
+							"not supported.~n")
+				end,
+			case UseServer of
+			ok ->
+				ok;
+			_AnyServer ->
+				Services = list_if_present(radio) ++
+					list_if_present(scrobble) ++
+					list_if_present(podcast),
+				{next, [{server, UseServer},
+					{services, Services}]}
 			end
 		end
+	end.
+
+list_if_present(Arg) ->
+	case init:get_argument(Arg) of
+	{ok, _Arg} -> [Arg];
+	error      -> []
 	end.
 
 usage() ->
 	io:fwrite(
 "USAGE $0 foreground                          -- run regularly~n" ++
 "USAGE $0 foreground -help                    -- this page~n" ++
-"USAGE $0 foreground -radio [MPDNAME]         -- play custom music radio~n" ++
 "USAGE $0 foreground -mpdsticker -gmbrc GMBRC -- import ratings~n" ++
 "USAGE $0 foreground -scrobble   -gmbrc GMBRC -- import playcounts~n"
+"USAGE $0 foreground [-server MPDNAME] [-radio] [-scrobble] [-podcast]~n~n" ++
+"-server MPDNAME     specifies the name of the MPD to use for radio/scrobble~n"
+++
+"-radio              enables the radio non-interactively~n" ++
+"-scrobble           enables the scrobbler non-interactively (ignores " ++
+								"-server)~n" ++
+"-podcast            enables the podcast functionality non-interactively~n"
 	).
-
-%--------------------------------------------------------------------[ Radio ]--
-% TODO IMPLEMENTED HERE FOR TESTING PURPOSES ONLY. MOVE CODE TO SENSIBLE LOCATION
-%      ONCE IT IS CLEAR WHAT IT WOULD BE
-
-% https://mpd.readthedocs.io/en/latest/protocol.html
-
-% key          := {Artist, Album, Title}
-% assoc_status := primary_only, use_only, ok
--record(plsong, {key, rating_uri, use_uri, playcount, rating, assoc_status}).
--type plsong() :: #plsong{key::{binary(), binary(), binary()},
-				rating_uri::binary(), use_uri::binary(),
-				playcount::integer(), rating::integer(),
-				assoc_status::atom()}.
-
-radio(MPDList, PrimaryRatings, Maloja, UseMPD, RadioConf) ->
-	io:fwrite("[ INFO  ] radio~n"),
-	ets:new(plsongs, [set, named_table, {keypos, #plsong.key}]),
-	DefaultRating = maps:get(default_rating, RadioConf),
-
-	io:fwrite("[ INFO  ] query primary~n"),
-	ConnPrimary = erlmpd_connect(PrimaryRatings, MPDList),
-	EmptyKeys = lists:foldr(fun(Entry, Acc) ->
-			PLS = erlmpd_to_plsong(Entry, DefaultRating),
-			case PLS#plsong.key == {<<>>, <<>>, <<>>} of
-			true ->
-				% Not even a warning, because typically it
-				% is OK to exclude those files w/o metadata.
-				Acc + 1;
-			false ->
-				case ets:insert_new(plsongs,
-					PLS#plsong{assoc_status=primary_only})
-				of
-				true  -> ok;
-				false -> io:fwrite("[WARNING] Duplicate " ++
-						"~p at ~s~n", [PLS#plsong.key,
-						PLS#plsong.rating_uri])
-				end,
-				Acc
-			end
-		end, 0, erlmpd_find_all(ConnPrimary)),
-	erlmpd:disconnect(ConnPrimary),
-	io:fwrite("[ INFO  ] skipped ~w empty keys~n", [EmptyKeys]),
-
-	io:fwrite("[ INFO  ] query use~n"),
-	ConnUse = erlmpd_connect(UseMPD, MPDList),
-	lists:foreach(fun(Entry) ->
-			PLS = erlmpd_to_plsong(Entry, DefaultRating),
-			case PLS#plsong.key == {<<>>, <<>>, <<>>} of
-			true -> pass_empty_keys;
-			false ->
-				case ets:update_element(plsongs, PLS#plsong.key,
-						[{#plsong.use_uri,
-							PLS#plsong.rating_uri},
-						{#plsong.assoc_status, ok}]) of
-				true  -> updated_ok;
-				false -> % Not found
-					io:fwrite("[WARNING] Not found " ++
-							"locally: ~p~n",
-							[PLS#plsong.key]),
-					ets:insert(plsongs, PLS#plsong{
-						assoc_status=use_only,
-						use_uri=PLS#plsong.rating_uri})
-				end
-			end
-		end, erlmpd_find_all(ConnUse)),
-	erlmpd:disconnect(ConnUse),
-
-	io:fwrite("[ INFO  ] associate playcounts~n"),
-	URL = proplists:get_value(url, Maloja),
-	Key = proplists:get_value(key, Maloja),
-	% TODO z if this limit is exceeded need to either adjust Maloja to
-	%      do the querying for us or query multiple pages or limit the
-	%      time range!
-	{ok, {_Status, _Headers, AllScrobblesRaw}} = httpc:request(
-			io_lib:format("~s/scrobbles?key=~s&perpage=16777216",
-			[URL, uri_string:quote(Key)])),
-	lists:foreach(fun scrobble_to_playcount/1, maps:get(<<"list">>,
-				jiffy:decode(AllScrobblesRaw, [return_maps]))),
-
-	io:fwrite("[ INFO  ] associate ratings~n"),
-	ConnRatings = erlmpd_connect(PrimaryRatings, MPDList),
-	RatingsRaw = erlmpd:sticker_find(ConnRatings, "song", "", "rating"),
-	erlmpd:disconnect(ConnRatings),
-	assign_ratings(RatingsRaw),
-
-	io:fwrite("[ INFO  ] drop primary only...~n"),
-	RM = ets:select(plsongs, ets:fun2ms(fun(X) when X#plsong.assoc_status ==
-					primary_only -> X#plsong.key end)),
-	lists:foreach(fun(K) -> ets:delete(plsongs, K) end, RM),
-	io:fwrite("[ INFO  ] ~w items removed from DB~n", [length(RM)]),
-
-	% TODO HIGHLY SPECIFIC FOR NOW / DEVISE SOMETHING ELSE. MAYBE
-	%      ALLOW SPECIFYING A MATCH SPEC IN CONFIG OR SOMETHING?
-	io:fwrite("[ INFO  ] filter non-radio songs...~n"),
-	RM2 = ets:select(plsongs, ets:fun2ms(fun(X) when
-			binary_part(X#plsong.rating_uri, {0, 5}) =:= <<"epic/">>
-			-> X#plsong.key end)),
-	lists:foreach(fun(K) -> ets:delete(plsongs, K) end, RM2),
-	io:fwrite("[ INFO  ] ~w items removed from DB~n", [length(RM2)]),
-	
-	ConnUse2 = erlmpd_connect(UseMPD, MPDList),
-	radio_play(ConnUse2, RadioConf),
-	erlmpd:disconnect(ConnUse2),
-
-	ets:delete(plsongs),
-	ok.
-
-erlmpd_connect(MPDName, MPDList) ->
-	HostPort = proplists:get_value(ip,
-					proplists:get_value(MPDName, MPDList)),
-	{Host, Port} = HostPort,
-	{ok, Conn} = erlmpd:connect(Host, Port),
-	Conn.
-
-% Query all data (modified-since '0') or (base '')
-erlmpd_find_all(Conn) ->
-	erlmpd:find(Conn, {base, <<>>}).
-
-erlmpd_to_plsong(Entry, DefaultRating) ->
-	#plsong{key=erlmpd_to_key(Entry),
-		rating_uri=normalize_always(proplists:get_value(file, Entry)),
-		playcount=0,
-		rating=DefaultRating}.
-
-erlmpd_to_key(Entry) ->
-	{normalize_key(proplists:get_value('Artist',   Entry, <<>>)),
-	 normalize_strong(proplists:get_value('Album', Entry, <<>>)),
-	 normalize_key(proplists:get_value('Title',    Entry, <<>>))}.
-
-% Expensive normalization option required due to the fact that scrobbling or
-% Maloja seem to mess with the supplied metadata.
-normalize_key(Value) ->
-	normalize_always(normalize_safe(Value)).
-
-normalize_safe(Value) ->
-	re:replace(string:replace(string:replace(
-				lists:join(<<" ">>, string:lexemes(Value, " ")),
-			"[", "("), "]", ")"),
-		" \\(?feat\\.? .*$", "").
-
-normalize_strong(Value) ->
-	normalize_always(re:replace(normalize_safe(Value), " \\(.*\\)$", "")).
-
-normalize_always(Value) ->
-	unicode:characters_to_nfc_binary(Value).
-
-scrobble_to_playcount(Scrobble) ->
-	ScrobbleTrack = maps:get(<<"track">>, Scrobble),
-	ScrobbleAlbum = maps:get(<<"album">>, ScrobbleTrack),
-	TitleRaw = maps:get(<<"title">>, ScrobbleTrack),
-	Titles = [normalize_key(TitleRaw), normalize_strong(TitleRaw)],
-	Artists = case maps:get(<<"artists">>, ScrobbleTrack) of
-		[A1|[A2|[]]] -> [normalize_key([A1, <<" & ">>, A2])|
-				[normalize_key([A2, <<" & ">>, A1])|
-				[A1|[A2|[]]]]];
-		OtherArtists -> OtherArtists
-	end,
-	Result = lists:foldl(fun({Title, ArtistRaw}, Acc) ->
-		case Acc of
-		1 -> 1;
-		0 ->
-			Artist = normalize_key(ArtistRaw),
-			case ScrobbleAlbum of
-			null ->
-				case ets:select(plsongs, ets:fun2ms(fun(X) when
-						element(1, X#plsong.key) ==
-								Artist andalso
-						element(3, X#plsong.key) ==
-								Title
-					-> element(2, X#plsong.key) end))
-				of
-				[] ->
-					0;
-				[AlbumI] ->
-					plsongs_inc({Artist, AlbumI, Title});
-				[AlbumI|_OtherAlbums] ->
-					io:fwrite("[WARNING] Not unique: " ++
-						"<~s/~s> -> <~s>~n",
-						[Artist, Title, AlbumI]),
-					plsongs_inc({Artist, AlbumI, Title})
-				end;
-			_Other ->
-				AlbumTitle = normalize_strong(maps:get(
-					<<"albumtitle">>, ScrobbleAlbum)),
-				CheckKey = {Artist, AlbumTitle, Title},
-				case ets:lookup(plsongs, CheckKey) of
-				[]      -> 0;
-				[_Item] -> plsongs_inc(CheckKey)
-				% other case prevented by set property of table!
-				end
-			end
-		end
-	end, 0, [{Title, Artist} || Title <- Titles, Artist <- Artists]),
-	case Result of
-	1 -> ok;
-	0 -> io:fwrite("[WARNING] Skipped: ~p~n", [ScrobbleTrack])
-	end.
-
-plsongs_inc(Key) ->
-	ets:update_counter(plsongs, Key, {#plsong.playcount, 1}),
-	1.
-
-% TODO x RECURSIVE PURLY FOR HISTORICAL REASONS
-assign_ratings([]) ->
-	ok;
-assign_ratings([Entry|Rem]) ->
-	Path = normalize_always(proplists:get_value(file, Entry)),
-	DBKey = case ets:select(plsongs, ets:fun2ms(fun(X) when
-				X#plsong.rating_uri == Path -> X#plsong.key
-			end)) of
-		[] -> io:fwrite("[WARNING] Not in DB: ~p~n", [Path]);
-		[UniqueKey] -> UniqueKey;
-		MultipleResults -> io:fwrite("[WARNING] Rating not unique: " ++
-			"~s:~n  ~p. Skipped...~n", [Path, MultipleResults])
-		end,
-	Rating = case proplists:get_value(rating, Entry, nothing) of
-		nothing -> nothing;
-		<<"1">> -> 0;
-		NotOne  -> binary_to_integer(NotOne) * 10
-		end,
-	case {DBKey, Rating} of
-	{ok,       _AnyRating}  -> skip;
-	{_AnyKey,  nothing}     -> skip;
-	{_GoodKey, _GoodRating} -> ets:update_element(plsongs, DBKey,
-						{#plsong.rating, Rating})
-	end,
-	assign_ratings(Rem).
-
-radio_play(ConnUse, RadioConf) ->
-	io:fwrite("[ INFO  ] Compute schedule...~n"),
-	Schedule = schedule_compute(RadioConf),
-	[H|_T] = Schedule,
-	radio_enqueue(ConnUse, H),
-	radio_play(ConnUse, RadioConf, Schedule).
-
-radio_enqueue(ConnUse, SongKey) ->
-	[Value] = ets:lookup(plsongs, SongKey),
-	URI = binary_to_list(Value#plsong.use_uri),
-	ok = erlmpd:add(ConnUse, URI).
-
-radio_play(ConnUse, RadioConf, [Await2|[]]) ->
-	radio_play(ConnUse, RadioConf, [Await2|schedule_compute(RadioConf)]);
-radio_play(ConnUse, RadioConf, Schedule) ->
-	[Await|TSched] = Schedule,
-	case erlmpd:idle(ConnUse, [player]) of
-	[player] ->
-		% Could be relevant
-		CurrentSong = erlmpd_to_key(erlmpd:currentsong(ConnUse)),
-		case CurrentSong =:= Await of
-		true ->
-			[Next|_Others] = TSched,
-			plsongs_inc(CurrentSong),
-			io:fwrite("FOUND ~s - ~s :: ENQ ~s - ~s~n",
-					[element(1, CurrentSong),
-					element(3, CurrentSong),
-					element(1, Next), element(3, Next)]),
-			radio_enqueue(ConnUse, Next),
-			radio_play(ConnUse, RadioConf, TSched);
-		false ->
-			radio_play(ConnUse, RadioConf, Schedule)
-		end;
-	_Other ->
-		% ignore
-		radio_play(ConnUse, RadioConf, Schedule)
-	end.
-
-% Compute a Music Schedule according to the following algorithm:
-% Partition songs by rating, drop all 1-star rated songs, shuffle the per-rating
-% lists, sort them by play count ASC, ensure that 4+5 stars are at least 30%
-% (if not, repeat them as necessary) and then interleave the lists as to produce
-% a fair playlist with enough good songs. Ordering by play count ensures that
-% repeated execution of the same algorithm always yields diverse playlists.
-schedule_compute(Conf) ->
-	MinGoodPerc   = maps:get(min_good_perc,  Conf),
-	ChaosFactor   = maps:get(chaos_factor,   Conf),
-	InitialFactor = maps:get(initial_factor, Conf),
-	ScheduleLen   = maps:get(schedule_len,   Conf),
-	% unclear why select_count did not return the intended output here?
-	Count1 = length(ets:select(plsongs, schedule_construct_match(0))),
-	Group2 = ets:select(plsongs, schedule_construct_match(20)),
-	Group3 = ets:select(plsongs, schedule_construct_match(40)),
-	Group4 = ets:select(plsongs, schedule_construct_match(60)),
-	Group5 = ets:select(plsongs, schedule_construct_match(80)),
-	Count2 = length(Group2),
-	Count3 = length(Group3),
-	Count4 = length(Group4),
-	Count5 = length(Group5),
-	CountT = Count2 + Count3 + Count4 + Count5,
-	Perce2 = Count2 * 100 / CountT,
-	Perce3 = Count3 * 100 / CountT,
-	Perce4 = Count4 * 100 / CountT,
-	Perce5 = Count5 * 100 / CountT,
-	io:fwrite("Distribution of stars~n 1 Star  ~5w (ignore)~n" ++
-			" 2 Stars ~5w (~5.2f%)~n 3 Stars ~5w (~5.2f%)~n" ++
-			" 4 Stars ~5w (~5.2f%)~n 5 Stars ~5w (~5.2f%)~n",
-			[Count1, Count2, Perce2, Count3, Perce3,
-			Count4, Perce4, Count5, Perce5]),
-	Duplicate = case Perce4 + Perce5 < MinGoodPerc of
-			true  -> trunc(MinGoodPerc / (Perce4 + Perce5));
-			false -> 1
-			end,
-	io:fwrite("Duplicate = ~p~n", [Duplicate]),
-	Schedule = schedule_merge([
-		schedule_shuffle(ChaosFactor, Group5, Duplicate),
-		schedule_shuffle(ChaosFactor, Group4, Duplicate),
-		schedule_shuffle(ChaosFactor, Group3, 1),
-		schedule_shuffle(ChaosFactor, Group2, 1)
-	], ScheduleLen, InitialFactor),
-	io:fwrite("Schedule of ~w songs:~n", [length(Schedule)]),
-	lists:foreach(fun(ID) ->
-			[Entry] = ets:lookup(plsongs, ID),
-			io:fwrite("R~3w C~4w ~s - ~s~n", [Entry#plsong.rating,
-				Entry#plsong.playcount,
-				element(1, Entry#plsong.key),
-				element(3, Entry#plsong.key)])
-		end, Schedule),
-	Schedule.
-
-schedule_construct_match(Rating) ->
-	ets:fun2ms(fun(X) when X#plsong.rating > Rating andalso
-				X#plsong.rating =< (Rating + 20) -> X end).
-
-% https://stackoverflow.com/questions/8817171/shuffling-elements-in-a-list-
-schedule_shuffle(ChaosFactor, Group, Duplicate) ->
-	lists:flatten(lists:map(fun(_Ctr) ->
-		[Y || {_, Y} <- lists:sort([{rand:uniform() * ChaosFactor +
-			S#plsong.playcount, S#plsong.key} || S <- Group])]
-	end, lists:seq(1, Duplicate))).
-
-schedule_merge(Groups, Limit, InitialFactor) ->
-	NonEmptyGroups = lists:filter(fun (X) -> X /= [] end, Groups),
-	schedule_merge_annotated([], Limit, lists:zipwith(fun(Group, ID) ->
-			LGroup = length(Group),
-			% Perc (“0.0”),         ID, Num, Of,     Group
-			{ InitialFactor/LGroup, ID, 0,   LGroup, Group }
-		end, NonEmptyGroups, lists:seq(1, length(NonEmptyGroups)))).
-
-schedule_merge_annotated(Schedule, _Limit, []) ->
-	lists:reverse(Schedule);
-schedule_merge_annotated(Schedule, Limit, _AnnotatedGroups)
-					when length(Schedule) >= Limit ->
-	lists:reverse(Schedule);
-schedule_merge_annotated(Schedule, Limit, AnnotatedGroups) ->
-	{_Perc, SelID, Num, Of, [SelItem|SelRem]} = lists:min(AnnotatedGroups),
-	Others = lists:filter(fun({_Perc2, ID, _Num, _Of, _Group}) ->
-					ID /= SelID end, AnnotatedGroups),
-	NewNum = Num + 1,
-	NewPerc = NewNum / Of,
-	case NewNum < Of of
-	true  -> schedule_merge_annotated([SelItem|Schedule], Limit,
-			[{NewPerc, SelID, NewNum, Of, SelRem}|Others]);
-	false -> schedule_merge_annotated([SelItem|Schedule], Limit, Others)
-	end.
 
 %------------------------------------------------------------[ GMBRC Parsing ]--
 -record(gmbsong, {gmbidx, path, artist, album, title, year, lastplay, playcount,
@@ -519,7 +185,7 @@ import_ratings_to_stickers(MPDList, PrimaryRatings) ->
 		end, RatedSongs),
 	erlmpd:disconnect(Conn).
 
-% artist, album, title 
+% artist, album, title
 find_root_directory(Conn) ->
 	Paths = [extract_root(Conn, Song) || Song <-
 			find_alpha_songs(gmb_songs, ets:first(gmb_songs), [])],
@@ -560,7 +226,7 @@ find_alpha_songs(Tab, Key, Acc) ->
 				validate_alpha(Song#gmbsong.title) of
 			true  -> [Song|Acc];
 			false -> Acc
-			end). 
+			end).
 
 % https://erlang.org/pipermail/erlang-questions/2015-August/085486.html
 % https://erlang.org/pipermail/erlang-questions/2015-August/085489.html

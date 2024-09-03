@@ -50,13 +50,13 @@ handle_cast({db_playing, SongProp}, Ctx=#rr{schedule=[{Key, _ID}|Tail]}) ->
 handle_cast(_Other, Ctx) ->
 	{noreply, Ctx}.
 
-% TODO CTX IS NEWLY R/O - NO NEED TO COPY THE CTX ALL OF THE TIME
 log(Msg, Ctx) ->
 	maenmpc_svc:log(Ctx#rr.talk_to, #dblog{msg=Msg, origin=radio}),
 	Ctx.
 
 radio_start(MPDName, Ctx0) when Ctx0#rr.active =:= false ->
-	Ctx1 = log("start radio", Ctx0#rr{active=MPDName}),
+	Ctx1 = Ctx0#rr{active=MPDName},
+	log("start radio", Ctx1),
 	ets:new(plsongs, [set, named_table, {keypos, #dbsong.key}]),
 
 	Len        = length(Ctx1#rr.mpd_list),
@@ -65,73 +65,70 @@ radio_start(MPDName, Ctx0) when Ctx0#rr.active =:= false ->
 	RatingsIdx = proplists:get_value(Ctx1#rr.primary_ratings, Key2Idx),
 	UseIdx     = proplists:get_value(Ctx1#rr.active,          Key2Idx),
 
-	Ctx2 = log("query primary", Ctx1),
-	Ctx3 = foldl_all(fun(PLS, CtxI) ->
-			case ets:insert_new(plsongs, PLS) of
-			true  -> CtxI;
-			false -> log(io_lib:format("duplicate ~s/~s/~s",
-					[element(1, PLS#dbsong.key),
-					element(2, PLS#dbsong.key),
-					element(3, PLS#dbsong.key)]), CtxI)
+	log("query primary", Ctx1),
+	foreach_all(fun(PLS) ->
+		case ets:insert_new(plsongs, PLS) of
+		true  -> ok;
+		false -> log(io_lib:format("duplicate ~s/~s/~s",
+				[element(1, PLS#dbsong.key),
+				element(2, PLS#dbsong.key),
+				element(3, PLS#dbsong.key)]), Ctx1)
+		end
+	end, Ctx1#rr.primary_ratings, RatingsIdx, Ctx1),
+
+	log("query use", Ctx1),
+	foreach_all(fun(PLS) ->
+		case ets:lookup(plsongs, PLS#dbsong.key) of
+		[] -> % Not found
+			ets:insert(plsongs, PLS),
+			log(io_lib:format("not found locally: ~s/~s/~s",
+				[element(1, PLS#dbsong.key),
+				element(2, PLS#dbsong.key),
+				element(3, PLS#dbsong.key)]), Ctx1);
+		[PLIDB] ->
+			NewURIs = maenmpc_erlmpd:merge_tuple(
+				PLS#dbsong.uris, PLIDB#dbsong.uris),
+			case NewURIs =/= PLS#dbsong.uris of
+			true  -> true = ets:update_element(plsongs,
+					PLS#dbsong.key,
+					[{#dbsong.uris, NewURIs}]);
+			false -> true
 			end
-		end, Ctx2, Ctx2#rr.primary_ratings, RatingsIdx, Ctx2),
+		end
+	end, Ctx1#rr.active, UseIdx, Ctx1),
 
-	% Ctx4 reserved
+	log("associate playcounts", Ctx1),
+	{Ctx2, Skip} = maenmpc_maloja:foldl_scrobbles(
+		fun scrobble_to_playcount/2, {Ctx1, 0}, Ctx1#rr.maloja),
+	log(io_lib:format("~w playcounts skipped", [Skip]), Ctx2),
 
-	Ctx5 = log("query use", Ctx3),
-	Ctx6 = foldl_all(fun(PLS, CtxI) ->
-			case ets:lookup(plsongs, PLS#dbsong.key) of
-			[] -> % Not found
-				ets:insert(plsongs, PLS),
-				log(io_lib:format("not found locally: ~s/~s/~s",
-					[element(1, PLS#dbsong.key),
-					element(2, PLS#dbsong.key),
-					element(3, PLS#dbsong.key)]), CtxI);
-			[PLIDB] ->
-				NewURIs = maenmpc_erlmpd:merge_tuple(
-					PLS#dbsong.uris, PLIDB#dbsong.uris),
-				case NewURIs =/= PLS#dbsong.uris of
-				true -> true = ets:update_element(plsongs,
-						PLS#dbsong.key,
-						[{#dbsong.uris, NewURIs}]);
-				false -> true
-				end,
-				CtxI
-			end
-		end, Ctx5, Ctx5#rr.active, UseIdx, Ctx5),
-
-	Ctx7 = log("associate playcounts", Ctx6),
-	{Ctx8, Skip} = maenmpc_maloja:foldl_scrobbles(
-		fun scrobble_to_playcount/2, {Ctx7, 0}, Ctx7#rr.maloja),
-	Ctx8a = log(io_lib:format("~w playcounts skipped", [Skip]), Ctx8),
-
-	Ctx9 = log("associate ratings", Ctx8a),
+	log("associate ratings", Ctx2),
 	{ok, ConnRatings} = maenmpc_erlmpd:connect(proplists:get_value(
-				Ctx9#rr.primary_ratings, Ctx9#rr.mpd_list)),
+				Ctx2#rr.primary_ratings, Ctx2#rr.mpd_list)),
 	RatingsRaw = erlmpd:sticker_find(ConnRatings, "song", "", "rating"),
 	erlmpd:disconnect(ConnRatings),
-	Ctx10 = lists:foldl(fun(RawRating, CtxI) ->
-				assign_rating(RawRating, RatingsIdx, CtxI)
-			end, Ctx9, RatingsRaw),
+	lists:foreach(fun(RawRating) ->
+		assign_rating(RawRating, RatingsIdx, Ctx2)
+	end, RatingsRaw),
 
-	Ctx11 = log("drop primary only", Ctx10),
+	log("drop primary only", Ctx2),
 	RM = ets:select(plsongs, ets:fun2ms(fun(X) when
 		element(UseIdx, X#dbsong.uris) =:= <<>> -> X#dbsong.key end)),
 	lists:foreach(fun(K) -> ets:delete(plsongs, K) end, RM),
-	Ctx12 = log(io_lib:format("~w items dropped", [length(RM)]), Ctx11),
+	log(io_lib:format("~w items dropped", [length(RM)]), Ctx2),
 
 	% a bit of a specific hack, but better than hardcoding the path which
 	% was what we did before...
-	Ctx13 = log("filter non-radio songs...", Ctx12),
-	CMP   = maps:get(discard_prefix, Ctx13#rr.tbl),
+	log("filter non-radio songs...", Ctx2),
+	CMP   = maps:get(discard_prefix, Ctx2#rr.tbl),
 	CMPL  = byte_size(CMP),
 	RM2 = ets:select(plsongs, ets:fun2ms(fun(X) when binary_part(element(
 				RatingsIdx, X#dbsong.uris), {0, CMPL}) =:= CMP
 				-> X#dbsong.key end)),
 	lists:foreach(fun(K) -> ets:delete(plsongs, K) end, RM2),
-	Ctx14 = log(io_lib:format("~w items filtered", [length(RM2)]), Ctx13),
+	log(io_lib:format("~w items filtered", [length(RM2)]), Ctx2),
 
-	radio_play(Ctx14);
+	radio_play(Ctx2);
 radio_start(MPDName, Ctx) when Ctx#rr.active =/= false ->
 	radio_start(MPDName, radio_stop(Ctx)).
 
@@ -144,26 +141,23 @@ radio_start(MPDName, Ctx) when Ctx#rr.active =/= false ->
 % resilient to query a window range and insert in chunks of 1000 or 10000
 % entries instead of doing the naive full table scan. We can improve the
 % implementation if performance becomes too bad here...
-foldl_all(Func, Acc, MPD, Idx, Ctx1) ->
-	DefaultRating = maps:get(default_rating, Ctx1#rr.tbl),
-	Len           = length(Ctx1#rr.mpd_list),
+foreach_all(Func, MPD, Idx, Ctx) ->
+	DefaultRating = maps:get(default_rating, Ctx#rr.tbl),
+	Len           = length(Ctx#rr.mpd_list),
 	{ok, Conn}    = maenmpc_erlmpd:connect(proplists:get_value(MPD,
-							Ctx1#rr.mpd_list)),
-	RV = lists:foldl(
-		fun(RawEntry, Acc2) ->
+							Ctx#rr.mpd_list)),
+	lists:foreach(
+		fun(RawEntry) ->
 			PLS = maenmpc_erlmpd:to_dbsong(RawEntry, Idx, Len),
-			Func(PLS#dbsong{rating=DefaultRating, playcount=0},
-									Acc2)
+			Func(PLS#dbsong{rating=DefaultRating, playcount=0})
 		end,
-		Acc,
 		erlmpd:find(Conn, {lnot, {land, [
 			{tagop, artist, eq, ""},
 			{tagop, album,  eq, ""},
 			{tagop, title,  eq, ""}
 		]}})
 	),
-	erlmpd:disconnect(Conn),
-	RV.
+	erlmpd:disconnect(Conn).
 
 scrobble_to_playcount(Scrobble, {Ctx, Ctr0}) ->
 	ScrobbleTrack = maps:get(<<"track">>, Scrobble),
@@ -179,9 +173,9 @@ scrobble_to_playcount(Scrobble, {Ctx, Ctr0}) ->
 		OtherArtists ->
 			OtherArtists
 		end,
-	{Result, CtxR} = lists:foldl(fun({Title, ArtistRaw}, {Acc, CtxI}) ->
+	Result = lists:foldl(fun({Title, ArtistRaw}, Acc) ->
 		case Acc of
-		1 -> {1, CtxI};
+		1 -> 1;
 		0 ->
 			Artist = maenmpc_erlmpd:normalize_key(ArtistRaw),
 			case ScrobbleAlbum of
@@ -193,15 +187,14 @@ scrobble_to_playcount(Scrobble, {Ctx, Ctr0}) ->
 					-> element(2, X#dbsong.key) end))
 				of
 				[] ->
-					{0, CtxI};
+					0;
 				[AlbumI] ->
-					{plsongs_inc({Artist, AlbumI, Title}),
-						CtxI};
+					plsongs_inc({Artist, AlbumI, Title});
 				[AlbumI|_OtherAlbums] ->
-					{plsongs_inc({Artist, AlbumI, Title}),
 					log(io_lib:format(
 						"not unique: ~s/~s -> ~s",
-						[Artist, Title, AlbumI]), CtxI)}
+						[Artist, Title, AlbumI]), Ctx),
+					plsongs_inc({Artist, AlbumI, Title})
 				end;
 			_Other ->
 				AlbumTitle = maenmpc_erlmpd:normalize_strong(
@@ -209,14 +202,14 @@ scrobble_to_playcount(Scrobble, {Ctx, Ctr0}) ->
 						ScrobbleAlbum)),
 				CheckKey = {Artist, AlbumTitle, Title},
 				case ets:lookup(plsongs, CheckKey) of
-				[]      -> {0, CtxI};
-				[_Item] -> {plsongs_inc(CheckKey), CtxI}
+				[]      -> 0;
+				[_Item] -> plsongs_inc(CheckKey)
 				% other case prevented by set property of table!
 				end
 			end
 		end
-	end, {0, Ctx}, [{Title, Artist} || Title <- Titles, Artist <- Artists]),
-	{CtxR, Ctr0 + (1 - Result)}.
+	end, 0, [{Title, Artist} || Title <- Titles, Artist <- Artists]),
+	{Ctx, Ctr0 + (1 - Result)}.
 
 plsongs_inc(Key) ->
 	ets:update_counter(plsongs, Key, {#dbsong.playcount, 1}),
@@ -233,13 +226,12 @@ assign_rating(Entry, RatingsIdx, Ctx) ->
 	[UniqueKey] ->
 		case proplists:get_value(rating, Entry, nothing) of
 		nothing ->
-			Ctx;
+			true;
 		BinVal ->
 			Rating = maenmpc_erlmpd:convert_rating(
 						binary_to_integer(BinVal)),
 			true = ets:update_element(plsongs, UniqueKey,
-						{#dbsong.rating, Rating}),
-			Ctx
+						{#dbsong.rating, Rating})
 		end;
 	MultipleResults ->
 		log(io_lib:format("skip rating not unique: ~s: ~w",
@@ -268,7 +260,7 @@ radio_enqueue(Ctx=#rr{talk_to=Dest, schedule=[{SongKey, ID}|T]}) ->
 % (if not, repeat them as necessary) and then interleave the lists as to produce
 % a fair playlist with enough good songs. Ordering by play count ensures that
 % repeated execution of the same algorithm always yields diverse playlists.
-schedule_compute(Ctx0=#rr{tbl=Conf}) ->
+schedule_compute(CtxI=#rr{tbl=Conf}) ->
 	MinGoodPerc   = maps:get(min_good_perc,  Conf),
 	ChaosFactor   = maps:get(chaos_factor,   Conf),
 	InitialFactor = maps:get(initial_factor, Conf),
@@ -288,21 +280,17 @@ schedule_compute(Ctx0=#rr{tbl=Conf}) ->
 	Perce3 = Count3 * 100 / CountT,
 	Perce4 = Count4 * 100 / CountT,
 	Perce5 = Count5 * 100 / CountT,
-	Ctx1 = log("distribution of stars", Ctx0),
-	Ctx2 = log(io_lib:format(" 1 star  ~5w (ignore)", [Count1]), Ctx1),
-	Ctx3 = log(io_lib:format(" 2 stars ~5w (~5.2f%)", [Count2, Perce2]),
-									Ctx2),
-	Ctx4 = log(io_lib:format(" 3 stars ~5w (~5.2f%)", [Count3, Perce3]),
-									Ctx3),
-	Ctx5 = log(io_lib:format(" 4 stars ~5w (~5.2f%)", [Count4, Perce4]),
-									Ctx4),
-	Ctx6 = log(io_lib:format(" 5 stars ~5w (~5.2f%)", [Count5, Perce5]),
-									Ctx5),
+	log("distribution of stars", CtxI),
+	log(io_lib:format(" 1 star  ~5w (ignore)", [Count1]), CtxI),
+	log(io_lib:format(" 2 stars ~5w (~5.2f%)", [Count2, Perce2]), CtxI),
+	log(io_lib:format(" 3 stars ~5w (~5.2f%)", [Count3, Perce3]), CtxI),
+	log(io_lib:format(" 4 stars ~5w (~5.2f%)", [Count4, Perce4]), CtxI),
+	log(io_lib:format(" 5 stars ~5w (~5.2f%)", [Count5, Perce5]), CtxI),
 	Duplicate = case Perce4 + Perce5 < MinGoodPerc of
 			true  -> trunc(MinGoodPerc / (Perce4 + Perce5));
 			false -> 1
 			end,
-	Ctx7 = log(io_lib:format("duplicate = ~w", [Duplicate]), Ctx6),
+	log(io_lib:format("duplicate = ~w", [Duplicate]), CtxI),
 	Schedule = schedule_merge([
 		schedule_shuffle(ChaosFactor, Group5, Duplicate),
 		schedule_shuffle(ChaosFactor, Group4, Duplicate),
@@ -310,20 +298,19 @@ schedule_compute(Ctx0=#rr{tbl=Conf}) ->
 		schedule_shuffle(ChaosFactor, Group2, 1)
 	], ScheduleLen, InitialFactor),
 
-	Ctx8 = log(io_lib:format("schedule of ~w songs", [length(Schedule)]),
-									Ctx7),
-	lists:foldl(fun(ID, CtxI) ->
+	log(io_lib:format("schedule of ~w songs", [length(Schedule)]), CtxI),
+	lists:foldl(fun(ID, CtxII) ->
 		[Entry] = ets:lookup(plsongs, ID),
-		CtxI1 = log(io_lib:format("~s ~4w ~s - ~s",
+		log(io_lib:format("~s ~4w ~s - ~s",
 			[maenmpc_erlmpd:format_rating(Entry#dbsong.rating),
 			Entry#dbsong.playcount, element(1, Entry#dbsong.key),
-			element(3, Entry#dbsong.key)]), CtxI),
+			element(3, Entry#dbsong.key)]), CtxII),
 		% Yes, its inefficient here but other ways would be much more
 		% convoluted! Need to assign log ID to entry and keep it all
 		% in order because log has a side-effect!
-		% TODO x NEWLY IT IS NO LONGER NECESSARY - CLEAN IT UP!
-		CtxI1#rr{schedule=CtxI1#rr.schedule ++ [{ID, 0}]}
-	end, Ctx8#rr{schedule=[]}, Schedule).
+		% TODO x NEWLY IT MAY NO LONGER BE NECESSARY - COULD SPLIT OUT LIST GENERATION AND PRINTING?
+		CtxII#rr{schedule=CtxII#rr.schedule ++ [{ID, 0}]}
+	end, CtxI#rr{schedule=[]}, Schedule).
 
 schedule_construct_match(Rating) ->
 	ets:fun2ms(fun(X) when X#dbsong.rating > Rating andalso
