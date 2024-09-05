@@ -1,5 +1,5 @@
 -module(maenmpc_cli).
--export([run/4]).
+-export([run/3]).
 -include_lib("stdlib/include/ms_transform.hrl").
 
 -define(SCROBBLEBASE,  1700000000).
@@ -8,39 +8,42 @@
 
 % return ok to signal success, {error, "Descr"} for failure, {next, _Params}
 % to exec to app
-run(MPDList, PrimaryRatings, Maloja, RadioConf) ->
+run(MPDList, PrimaryRatings, Maloja) ->
 	case init:get_argument(help) of
 	{ok, _Any} ->
 		usage();
 	_NoHelpArg ->
-		case init:get_argument(gmbrc) of
-		{ok, [[Path]]} ->
-			use_gmbrc(MPDList, PrimaryRatings, Maloja, Path);
-		_NoGMBRCArg ->
-			UseServer = case init:get_argument(server) of
-				error ->
-					[{MPDName1, _Config}|_Rest] = MPDList,
-					MPDName1;
-				[[]] ->
-					[{MPDName1, _Config}|_Rest] = MPDList,
-					MPDName1;
-				[[MPDName]] ->
-					list_to_atom(MPDName);
-				_Other ->
-					io:fwrite("Multiple MPD names are " ++
-							"not supported.~n")
-				end,
-			case UseServer of
-			ok ->
-				ok;
-			_AnyServer ->
-				Services = list_if_present(radio) ++
-					list_if_present(scrobble) ++
-					list_if_present(podcast),
-				{next, [{server, UseServer},
-					{services, Services}]}
+		case init:get_argument('export-stickers') of
+		{ok, [[Path1]]} ->
+			export_stickers(Path1, PrimaryRatings);
+		_NoExportArg ->
+			case init:get_argument('import-scrobbles') of
+			{ok, [[Path2]]} ->
+				import_scrobbles(Path2, Maloja);
+			_NoImportArg ->
+				case init:get_argument(gmbrc) of
+				{ok, [[Path]]} -> use_gmbrc(MPDList,
+						PrimaryRatings, Maloja, Path);
+				_NoGMBRCArg -> run_server(MPDList)
+				end
 			end
 		end
+	end.
+
+run_server(MPDList) ->
+	UseServer = case init:get_argument(server) of
+		error       -> [{MPDName1, _Config}|_Rest] = MPDList, MPDName1;
+		[[]]        -> [{MPDName1, _Config}|_Rest] = MPDList, MPDName1;
+		[[MPDName]] -> list_to_atom(MPDName);
+		_Other      -> io:fwrite("Multiple MPDs are not supported.~n")
+		end,
+	case UseServer of
+	ok ->
+		ok;
+	_AnyServer ->
+		Services = list_if_present(radio) ++ list_if_present(scrobble)
+						++ list_if_present(podcast),
+		{next, [{server, UseServer}, {services, Services}]}
 	end.
 
 list_if_present(Arg) ->
@@ -54,8 +57,10 @@ usage() ->
 "USAGE $0 foreground                          -- run regularly~n" ++
 "USAGE $0 foreground -help                    -- this page~n" ++
 "USAGE $0 foreground -mpdsticker -gmbrc GMBRC -- import ratings~n" ++
-"USAGE $0 foreground -scrobble   -gmbrc GMBRC -- import playcounts~n"
-"USAGE $0 foreground [-server MPDNAME] [-radio] [-scrobble] [-podcast]~n~n" ++
+"USAGE $0 foreground -scrobble   -gmbrc GMBRC -- import playcounts~n" ++
+"USAGE $0 foreground -export-stickers SQLITE  -- export ratings+playcounts~n" ++
+"USAGE $0 foreground -import-scrobbles JSON   -- import scrobbles~n~n" ++
+"USAGE $0 foreground [-server MPDNAME] [-radio] [-scrobble] [-podcast]~n" ++
 "-server MPDNAME     specifies the name of the MPD to use for radio/scrobble~n"
 ++
 "-radio              enables the radio non-interactively~n" ++
@@ -63,6 +68,17 @@ usage() ->
 								"-server)~n" ++
 "-podcast            enables the podcast functionality non-interactively~n"
 	).
+
+%----------------------------------------------------[ SQLITE Sticker Export ]--
+export_stickers(Path, PrimaryRatings) ->
+	{Radio, _Idx} = radio:provision_ets(PrimaryRatings, radio:init([none])),
+	% TODO ASTAT IMPLEMENT
+	ok.
+
+%---------------------------------------------------[ Maloja Scrobble Import ]--
+import_scrobbles(Path, Maloja) ->
+	% TODO N_IMPL
+	ok.
 
 %------------------------------------------------------------[ GMBRC Parsing ]--
 -record(gmbsong, {gmbidx, path, artist, album, title, year, lastplay, playcount,

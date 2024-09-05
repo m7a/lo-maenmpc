@@ -1,6 +1,7 @@
 -module(maenmpc_radio).
 -behavior(gen_server).
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
+-export([init/1, provision_ets/2, handle_call/3, handle_cast/2, handle_info/2,
+	code_change/3]).
 -include_lib("stdlib/include/ms_transform.hrl").
 -include_lib("maenmpc_db.hrl").
 
@@ -55,10 +56,28 @@ log(Msg, Ctx) ->
 	Ctx.
 
 radio_start(MPDName, Ctx0) when Ctx0#rr.active =:= false ->
-	Ctx1 = Ctx0#rr{active=MPDName},
-	log("start radio", Ctx1),
+	log("start radio", Ctx0),
+	{Ctx2, RatingsIdx} = provision_ets(MPDName, Ctx0),
+
+	% a bit of a specific hack, but better than hardcoding the path which
+	% was what we did before...
+	log("filter non-radio songs...", Ctx2),
+	CMP   = maps:get(discard_prefix, Ctx2#rr.tbl),
+	CMPL  = byte_size(CMP),
+	RM2 = ets:select(plsongs, ets:fun2ms(fun(X) when binary_part(element(
+				RatingsIdx, X#dbsong.uris), {0, CMPL}) =:= CMP
+				-> X#dbsong.key end)),
+	lists:foreach(fun(K) -> ets:delete(plsongs, K) end, RM2),
+	log(io_lib:format("~w items filtered", [length(RM2)]), Ctx2),
+
+	radio_play(Ctx2);
+radio_start(MPDName, Ctx) when Ctx#rr.active =/= false ->
+	radio_start(MPDName, radio_stop(Ctx)).
+
+provision_ets(MPDName, Ctx0) ->
 	ets:new(plsongs, [set, named_table, {keypos, #dbsong.key}]),
 
+	Ctx1       = Ctx0#rr{active=MPDName},
 	Len        = length(Ctx1#rr.mpd_list),
 	Key2Idx    = lists:zip([Name || {Name, _ConnInfo} <- Ctx1#rr.mpd_list],
 							lists:seq(1, Len)),
@@ -98,8 +117,13 @@ radio_start(MPDName, Ctx0) when Ctx0#rr.active =:= false ->
 	end, Ctx1#rr.active, UseIdx, Ctx1),
 
 	log("associate playcounts", Ctx1),
-	{Ctx2, Skip} = maenmpc_maloja:foldl_scrobbles(
-		fun scrobble_to_playcount/2, {Ctx1, 0}, Ctx1#rr.maloja),
+	{Ctx2, Skip} =
+		case Ctx1#rr.maloja of
+		{none, none} -> playcounts_from_stickers(Ctx1, RatingsIdx);
+		_ValidConfig -> maenmpc_maloja:foldl_scrobbles(
+						fun scrobble_to_playcount/2,
+						{Ctx1, 0}, Ctx1#rr.maloja)
+		end,
 	log(io_lib:format("~w playcounts skipped", [Skip]), Ctx2),
 
 	log("associate ratings", Ctx2),
@@ -116,21 +140,7 @@ radio_start(MPDName, Ctx0) when Ctx0#rr.active =:= false ->
 		element(UseIdx, X#dbsong.uris) =:= <<>> -> X#dbsong.key end)),
 	lists:foreach(fun(K) -> ets:delete(plsongs, K) end, RM),
 	log(io_lib:format("~w items dropped", [length(RM)]), Ctx2),
-
-	% a bit of a specific hack, but better than hardcoding the path which
-	% was what we did before...
-	log("filter non-radio songs...", Ctx2),
-	CMP   = maps:get(discard_prefix, Ctx2#rr.tbl),
-	CMPL  = byte_size(CMP),
-	RM2 = ets:select(plsongs, ets:fun2ms(fun(X) when binary_part(element(
-				RatingsIdx, X#dbsong.uris), {0, CMPL}) =:= CMP
-				-> X#dbsong.key end)),
-	lists:foreach(fun(K) -> ets:delete(plsongs, K) end, RM2),
-	log(io_lib:format("~w items filtered", [length(RM2)]), Ctx2),
-
-	radio_play(Ctx2);
-radio_start(MPDName, Ctx) when Ctx#rr.active =/= false ->
-	radio_start(MPDName, radio_stop(Ctx)).
+	{Ctx2, RatingsIdx}.
 
 % Function to traverse the entire DB. I know MPD recommends not to do this but
 % in the use case it is required to do a full table scan (or come up with some
@@ -215,7 +225,18 @@ plsongs_inc(Key) ->
 	ets:update_counter(plsongs, Key, {#dbsong.playcount, 1}),
 	1.
 
-assign_rating(Entry, RatingsIdx, Ctx) ->
+playcounts_from_stickers(Ctx, RatingsIdx) ->
+	{ok, ConnStickers} = maenmpc_erlmpd:connect(proplists:get_value(
+				Ctx#rr.primary_ratings, Ctx#rr.mpd_list)),
+	PlaycountsRaw = erlmpd:sticker_find(ConnStickers, "song", "",
+								"playCount"),
+	erlmpd:disconnect(ConnStickers),
+	{Ctx, lists:foldl(fun(RawPlaycount, Acc) ->
+		Acc + assign_from_sticker(RawPlaycount, RatingsIdx, Ctx,
+			fun(_Entry, UniqueKey) -> plsongs_inc(UniqueKey) end)
+	end, 0, PlaycountsRaw)}.
+
+assign_from_sticker(Entry, RatingsIdx, Ctx, Callback) ->
 	Path = maenmpc_erlmpd:normalize_always(proplists:get_value(file,
 									Entry)),
 	case ets:select(plsongs, ets:fun2ms(
@@ -224,6 +245,14 @@ assign_rating(Entry, RatingsIdx, Ctx) ->
 	[] ->
 		log(io_lib:format("skip not in db: ~s", [Path]), Ctx);
 	[UniqueKey] ->
+		Callback(Entry, UniqueKey);
+	MultipleResults ->
+		log(io_lib:format("skip not unique: ~s: ~w",
+						[Path, MultipleResults]), Ctx)
+	end.
+
+assign_rating(Entry, RatingsIdx, Ctx) ->
+	assign_from_sticker(Entry, RatingsIdx, Ctx, fun(_Entry, UniqueKey) ->
 		case proplists:get_value(rating, Entry, nothing) of
 		nothing ->
 			true;
@@ -232,11 +261,8 @@ assign_rating(Entry, RatingsIdx, Ctx) ->
 						binary_to_integer(BinVal)),
 			true = ets:update_element(plsongs, UniqueKey,
 						{#dbsong.rating, Rating})
-		end;
-	MultipleResults ->
-		log(io_lib:format("skip rating not unique: ~s: ~w",
-						[Path, MultipleResults]), Ctx)
-	end.
+		end
+	end).
 
 radio_play(Ctx) ->
 	radio_enqueue(schedule_compute(log("compute schedule...", Ctx))).
