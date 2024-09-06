@@ -5,9 +5,11 @@
 	{mod,          {maenmpc_app, []}},
 	{applications, [kernel, stdlib, sasl, inets, ssh, jiffy, erlmpd]},
 	% Do not start cecho by default to support CLI use!
-	% sqlite3 may only be added after running:
+	{included_applications, [cecho]},
+	% sqlite3 may only be used after running:
 	% /usr/lib/erlang/lib# ln -s p1_sqlite3-1.1.14 sqlite3-1.1.14
-	{included_applications, [cecho, sqlite3]},
+	% and then recompiling the application...
+	{optional_applications, [sqlite3]},
 	{env,          []},
 	{modules,      []},
 	{licenses,     ["GPL-3+"]},

@@ -71,9 +71,6 @@ usage() ->
 	).
 
 %----------------------------------------------------[ SQLITE Sticker Export ]--
-% To make use of this requires some hand-made compilation stuff TODO FIX IT
-% /usr/lib/erlang/lib# ln -s p1_sqlite3-1.1.14 sqlite3-1.1.14
-% Then define in `maenmpc.app.src`: {included_applications, [cecho, sqlite3]},
 export_stickers(Path, PrimaryRatings) ->
 	{ok, RadioIn} = maenmpc_radio:init([none]),
 	{_Radio, UseIdx} = maenmpc_radio:provision_ets(PrimaryRatings, RadioIn),
