@@ -51,6 +51,9 @@ handle_cast({db_playing, SongProp}, Ctx=#rr{schedule=[{Key, _ID}|Tail]}) ->
 handle_cast(_Other, Ctx) ->
 	{noreply, Ctx}.
 
+log(Msg, Ctx = #rr{talk_to=none}) ->
+	io:fwrite("RADIO ~s~n", [Msg]),
+	Ctx;
 log(Msg, Ctx) ->
 	maenmpc_svc:log(Ctx#rr.talk_to, #dblog{msg=Msg, origin=radio}),
 	Ctx.

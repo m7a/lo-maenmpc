@@ -1,5 +1,6 @@
 -module(maenmpc_cli).
 -export([run/3]).
+-include_lib("maenmpc_db.hrl").
 -include_lib("stdlib/include/ms_transform.hrl").
 
 -define(SCROBBLEBASE,  1700000000).
@@ -70,9 +71,44 @@ usage() ->
 	).
 
 %----------------------------------------------------[ SQLITE Sticker Export ]--
+% To make use of this requires some hand-made compilation stuff TODO FIX IT
+% /usr/lib/erlang/lib# ln -s p1_sqlite3-1.1.14 sqlite3-1.1.14
+% Then define in `maenmpc.app.src`: {included_applications, [cecho, sqlite3]},
 export_stickers(Path, PrimaryRatings) ->
-	{Radio, _Idx} = radio:provision_ets(PrimaryRatings, radio:init([none])),
-	% TODO ASTAT IMPLEMENT
+	{ok, RadioIn} = maenmpc_radio:init([none]),
+	{_Radio, UseIdx} = maenmpc_radio:provision_ets(PrimaryRatings, RadioIn),
+	{ok, SQLP} = sqlite3:open(maenmpc_sqlite, [{file, Path}]),
+	ok = sqlite3:create_table(SQLP, sticker, [
+			{type,  varchar, not_null},
+			{uri,   varchar, not_null},
+			{name,  varchar, not_null},
+			{value, varchar, not_null}
+		]),
+	ok = sqlite3:sql_exec(SQLP, "CREATE UNIQUE INDEX sticker_value " ++
+						"ON sticker(type, uri, name);"),
+	StickersToCreate = ets:select(plsongs, ets:fun2ms(fun(X) when
+				element(UseIdx, X#dbsong.uris) =/= <<>> andalso
+				(X#dbsong.rating =/= ?RATING_UNRATED orelse
+				X#dbsong.playcount =/= 0) ->
+		{element(UseIdx, X#dbsong.uris), X#dbsong.rating,
+							X#dbsong.playcount}
+	end)),
+	ets:delete(plsongs),
+	lists:foreach(fun({URI, Rating, Playcount}) ->
+		io:fwrite("WRITE ~s/~w/~w~n", [URI, Rating, Playcount]),
+		case Rating =/= ?RATING_UNRATED of
+		true -> sqlite3:write(SQLP, sticker, [{type, "song"},
+			{uri, URI}, {name, "rating"}, {value, Rating div 10}]);
+		false -> ok
+		end,
+		case Playcount =/= 0 of
+		true -> sqlite3:write(SQLP, sticker, [{type, "song"},
+			{uri, URI}, {name, "playCount"}, {value, Playcount}]);
+		false -> ok
+		end
+	end, StickersToCreate),
+	sqlite3:close(SQLP),
+	io:fwrite("finished~n"),
 	ok.
 
 %---------------------------------------------------[ Maloja Scrobble Import ]--

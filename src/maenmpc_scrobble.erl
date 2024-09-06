@@ -117,6 +117,7 @@ add_album_art(Payload, Ctx = #sc{calbumart={IDX, ConnInfo},
 			Payload
 		end;
 	{Type, Binary} ->
+		% TODO TO ALIGN WITH MOST RECENT VERSION OF THE PATCH USE `album_image` (or `track_image`)
 		maps:put(image, iolist_to_binary([<<"data:">>,Type,
 			<<";base64,">>,
 			base64:encode(iolist_to_binary(Binary))]), Payload)

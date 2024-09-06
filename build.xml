@@ -11,6 +11,7 @@
 <property name="mdpc.depends"
 	>erlang-base, erlang-jiffy, erlang-inets, mdvl-erlmpd,
 	mdvl-cecho</property>
+<property name="mdpc.recommends" value="erlang-p1-sqlite3"/>
 <property name="mdpc.bdep"
 	>rebar3, mdvl-cecho, mdvl-erlmpd, config-package-dev,
 	debhelper-compat (= 13)</property>
