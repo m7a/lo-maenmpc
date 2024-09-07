@@ -92,16 +92,24 @@ export_stickers(Path, PrimaryRatings) ->
 	end)),
 	ets:delete(plsongs),
 	lists:foreach(fun({URI, Rating, Playcount}) ->
-		io:fwrite("WRITE ~s/~w/~w~n", [URI, Rating, Playcount]),
-		case Rating =/= ?RATING_UNRATED of
-		true -> sqlite3:write(SQLP, sticker, [{type, "song"},
-			{uri, URI}, {name, "rating"}, {value, Rating div 10}]);
-		false -> ok
-		end,
-		case Playcount =/= 0 of
-		true -> sqlite3:write(SQLP, sticker, [{type, "song"},
-			{uri, URI}, {name, "playCount"}, {value, Playcount}]);
-		false -> ok
+		% TODO HARDCODE DEFAULT RATING AGAIN!
+		N = case Rating =/= ?RATING_UNRATED andalso Rating =/= 60 of
+				true -> sqlite3:write(SQLP, sticker, [
+					{type, "song"}, {uri, URI},
+					{name, "rating"},
+					{value, Rating div 10}]), 1;
+				false -> 0
+			end + case Playcount =/= 0 of
+				true -> sqlite3:write(SQLP, sticker, [
+					{type, "song"}, {uri, URI},
+					{name, "playCount"},
+					{value, Playcount}]), 1;
+				false -> 0
+			end,
+		case N of
+		0      -> ok;
+		_Other -> io:fwrite("WROTE ~s/~w/~w~n",
+						[URI, Rating, Playcount])
 		end
 	end, StickersToCreate),
 	sqlite3:close(SQLP),

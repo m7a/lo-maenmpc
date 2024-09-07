@@ -104,9 +104,9 @@ provision_ets(MPDName, Ctx0) ->
 		[] -> % Not found
 			ets:insert(plsongs, PLS),
 			log(io_lib:format("not found locally: ~s/~s/~s",
-				[element(1, PLS#dbsong.key),
-				element(2, PLS#dbsong.key),
-				element(3, PLS#dbsong.key)]), Ctx1);
+					[element(1, PLS#dbsong.key),
+					element(2, PLS#dbsong.key),
+					element(3, PLS#dbsong.key)]), Ctx1);
 		[PLIDB] ->
 			NewURIs = maenmpc_erlmpd:merge_tuple(
 				PLS#dbsong.uris, PLIDB#dbsong.uris),
@@ -236,22 +236,36 @@ playcounts_from_stickers(Ctx, RatingsIdx) ->
 	erlmpd:disconnect(ConnStickers),
 	{Ctx, lists:foldl(fun(RawPlaycount, Acc) ->
 		Acc + assign_from_sticker(RawPlaycount, RatingsIdx, Ctx,
-			fun(_Entry, UniqueKey) -> plsongs_inc(UniqueKey) end)
+							fun assign_playcount/2)
 	end, 0, PlaycountsRaw)}.
 
+% returns number of skipped entries
 assign_from_sticker(Entry, RatingsIdx, Ctx, Callback) ->
-	Path = maenmpc_erlmpd:normalize_always(proplists:get_value(file,
-									Entry)),
+	Path = proplists:get_value(file, Entry),
 	case ets:select(plsongs, ets:fun2ms(
 			fun(X) when element(RatingsIdx, X#dbsong.uris) =:= Path
 			-> X#dbsong.key end)) of
 	[] ->
-		log(io_lib:format("skip not in db: ~s", [Path]), Ctx);
+		log(io_lib:format("skip not in db: ~s", [Path]), Ctx),
+		1;
 	[UniqueKey] ->
-		Callback(Entry, UniqueKey);
+		Callback(Entry, UniqueKey),
+		0;
 	MultipleResults ->
 		log(io_lib:format("skip not unique: ~s: ~w",
-						[Path, MultipleResults]), Ctx)
+						[Path, MultipleResults]), Ctx),
+		1
+	end.
+
+assign_playcount(Entry, UniqueKey) ->
+	case proplists:get_value(playCount, Entry) of
+	undefined ->
+		1; % skip, key not found!
+	BinVal ->
+		Count = binary_to_integer(BinVal),
+		true = ets:update_element(plsongs, UniqueKey,
+						{#dbsong.playcount, Count}),
+		0
 	end.
 
 assign_rating(Entry, RatingsIdx, Ctx) ->
