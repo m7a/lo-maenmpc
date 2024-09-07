@@ -1,5 +1,5 @@
 #!/bin/sh -eu
-# Script to Re-Sample Audio 1.1.0, (c) 2024 Ma_Sys.ma <info@masysma.net>
+# Script to Re-Sample Audio 1.1.1, (c) 2024 Ma_Sys.ma <info@masysma.net>
 
 # General useful commands
 # $ abcde -o flac -a default,embedalbumart        # copy music from CD
@@ -14,10 +14,11 @@
 #      directory needs to be deleted from target prior to running
 
 root_src=/data/programs/music2
-root_target=/var/lib/mpd/music
-ssh=mpd@192.168.1.22
+root_target=/storage/3BD7-948E/masysma/music2
+ssh=u0_a162@192.168.1.102
+samplerate=48000
 
-parallelism=8
+parallelism=4
 
 if [ $# = 0 ]; then
 	rsl="$(printf "%s" "$root_src"    | wc -c)"
@@ -111,7 +112,7 @@ case "$1" in
 			cp "$line" "$tmpd"
 		else
 			ReSampler -i "$line" -o "$tmpd/$(basename "$line")" \
-						-r 96000 -b 24 > /dev/null
+					-r "$samplerate" -b 24 > /dev/null
 		fi
 	done
 	echo "[  L  ] $dst"
@@ -147,7 +148,7 @@ case "$1" in
 		fi
 		echo "[ RES ] $src"
 		# remove redirect to display more logging
-		ReSampler -i "$src" -o "$tmpf2" -r 96000 -b 24 > /dev/null
+		ReSampler -i "$src" -o "$tmpf2" -r "$samplerate" -b 24 > /dev/null
 		# file-based replay gain
 		loudgain -q -r -k -s e "$tmpf2" > /dev/null
 		echo "[  CP ] $dst"
