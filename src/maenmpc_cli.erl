@@ -118,7 +118,16 @@ export_stickers(Path, PrimaryRatings) ->
 
 %---------------------------------------------------[ Maloja Scrobble Import ]--
 import_scrobbles(Path, Maloja) ->
-	% TODO N_IMPL
+	Conn = maenmpc_maloja:conn(Maloja),
+	{ok, Binary} = file:read_file(Path),
+	Objects = Binary:split(<<"\n">>),
+	lists:foreach(fun(ObjectStr) ->
+		Map = jiffy:decode(ObjectStr, [return_maps]),
+		case maenmpc_maloja:scrobble(Map, Conn) of
+		ok           -> ok;
+		{error, Msg} -> io:fwrite("~s: ~s~n", [ObjectStr, Msg])
+		end
+	end, Objects),
 	ok.
 
 %------------------------------------------------------------[ GMBRC Parsing ]--

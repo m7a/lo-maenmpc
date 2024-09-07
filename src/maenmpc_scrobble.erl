@@ -124,7 +124,8 @@ add_album_art(Payload, Ctx = #sc{calbumart={IDX, ConnInfo},
 	end.
 
 scrobble_to_file(Payload, File, Ctx) ->
-	case file:write_file(File, jiffy:encode(Payload), [append]) of
+	case file:write_file(File, [jiffy:encode(Payload), <<"\n">>],
+								[append]) of
 	ok ->
 		ok;
 	{error, Reason} ->
