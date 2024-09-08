@@ -120,12 +120,19 @@ export_stickers(Path, PrimaryRatings) ->
 import_scrobbles(Path, Maloja) ->
 	Conn = maenmpc_maloja:conn(Maloja),
 	{ok, Binary} = file:read_file(Path),
-	Objects = Binary:split(<<"\n">>),
+	Objects = binary:split(Binary, <<"\n">>, [global]),
 	lists:foreach(fun(ObjectStr) ->
-		Map = jiffy:decode(ObjectStr, [return_maps]),
-		case maenmpc_maloja:scrobble(Map, Conn) of
-		ok           -> ok;
-		{error, Msg} -> io:fwrite("~s: ~s~n", [ObjectStr, Msg])
+		case ObjectStr /= <<>> of
+		true ->
+			Map = jiffy:decode(ObjectStr, [return_maps]),
+			case maenmpc_maloja:scrobble(Map, Conn) of
+			ok -> ok;
+			ok_exists -> io:fwrite("already exists: ~s~n",
+								[ObjectStr]);
+			{error, Msg} -> io:fwrite("~s: ~s~n", [ObjectStr, Msg])
+			end;
+		false ->
+			ok
 		end
 	end, Objects),
 	ok.
