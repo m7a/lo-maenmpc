@@ -13,18 +13,18 @@
 	mdvl-cecho</property>
 <property name="mdpc.recommends" value="erlang-p1-sqlite3"/>
 <property name="mdpc.bdep"
-	>rebar3, mdvl-cecho, mdvl-erlmpd, config-package-dev,
-	debhelper-compat (= 13)</property>
+	>rebar3, mdvl-cecho, mdvl-erlmpd, erlang-jiffy, erlang-inets,
+	config-package-dev, debhelper-compat (= 13)</property>
 <property name="mdpc.descrl">
  Experimental Audio Player
 </property>
 
 <property name="mdpc.file.install">
 _build/default/rel/maenmpc /usr/share/mdvl-maenmpc
-_build/default/lib/maenmpc/ebin /usr/share/mdvl-maenmpc/maenmpc/lib/maenmpc-0.1.0
-src /usr/share/mdvl-maenmpc/maenmpc/lib/maenmpc-0.1.0
-config/sys.config /usr/share/mdvl-maenmpc/maenmpc/releases/0.1.0
-config/vm.args /usr/share/mdvl-maenmpc/maenmpc/releases/0.1.0
+_build/default/lib/maenmpc/ebin /usr/share/mdvl-maenmpc/maenmpc/lib/maenmpc-0.1.1
+src /usr/share/mdvl-maenmpc/maenmpc/lib/maenmpc-0.1.1
+config/sys.config /usr/share/mdvl-maenmpc/maenmpc/releases/0.1.1
+config/vm.args /usr/share/mdvl-maenmpc/maenmpc/releases/0.1.1
 maenmpc /usr/bin
 </property>
 
@@ -38,11 +38,11 @@ maenmpc /usr/bin
 		<arg value="release"/>
 	</exec>
 	<!-- allow us to override the symlink with the actual contents here -->
-	<delete dir="_build/default/rel/${masysma.target}/lib/${masysma.target}-0.1.0"
+	<delete dir="_build/default/rel/${masysma.target}/lib/${masysma.target}-0.1.1"
 		followSymlinks="false" removeNotFollowedSymlinks="true"/>
-	<delete file="_build/default/rel/${masysma.target}/releases/0.1.0/vm.args"
+	<delete file="_build/default/rel/${masysma.target}/releases/0.1.1/vm.args"
 		followSymlinks="false" removeNotFollowedSymlinks="true"/>
-	<delete file="_build/default/rel/${masysma.target}/releases/0.1.0/sys.config"
+	<delete file="_build/default/rel/${masysma.target}/releases/0.1.1/sys.config"
 		followSymlinks="false" removeNotFollowedSymlinks="true"/>
 </target>
 

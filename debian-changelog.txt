@@ -1,3 +1,9 @@
+mdvl-maenmpc (1.0.3) stable; urgency=medium
+
+  * Updgrade to 0.1.1
+
+ -- Ma_Sys.ma Linux-Fan <info@masysma.net>  Sun, 08 Sep 2024 18:18:41 +0200
+
 mdvl-maenmpc (1.0.2) stable; urgency=medium
 
   * Update package to align with recent progress.

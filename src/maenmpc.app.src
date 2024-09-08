@@ -1,6 +1,6 @@
 {application, maenmpc, [
 	{description,  "Ma_Sys.ma Erlang NCurses-based Music Player Client"},
-	{vsn,          "0.1.0"},
+	{vsn,          "0.1.1"},
 	{registered,   []},
 	{mod,          {maenmpc_app, []}},
 	{applications, [kernel, stdlib, sasl, inets, ssh, jiffy, erlmpd]},

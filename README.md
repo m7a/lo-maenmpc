@@ -326,6 +326,10 @@ In order to enable scrobbling, the following options may be used
    and could later be scrobbled with a suitable `curl` POST request to Maloja
    for each line.
 
+For command line operation, the radio mode makes use of a MPD `playCount`
+sticker instead of Maloja when `url` and `key` are not present in the
+configuration.
+
 ### Section `podcast`
 
 In case you don't want to use the podcast feature, you can leave this section
