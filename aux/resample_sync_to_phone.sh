@@ -108,7 +108,7 @@ case "$1" in
 	mkdir "$tmpd"
 	echo "[ IN  ] $src"
 	find "$src" -maxdepth 1 -type f -name '*.flac' | while read -r line; do
-		if file "$line" | grep -qF "24 bit, stereo, 96 kHz"; then
+		if file "$line" | grep -qF "24 bit, stereo, 48 kHz"; then
 			cp "$line" "$tmpd"
 		else
 			ReSampler -i "$line" -o "$tmpd/$(basename "$line")" \
@@ -130,7 +130,7 @@ case "$1" in
 	tmpf2="/tmp/resample2_$$.flac"
 	ismp3=0
 	if [ -f "$src" ]; then
-		if file "$src" | grep -qF "24 bit, stereo, 96 kHz"; then
+		if file "$src" | grep -qF "24 bit, stereo, 48 kHz"; then
 			# no need to convert
 			echo "[ CPF ] $dst"
 			exec scp "$src" "$ssh:$dst"

@@ -859,6 +859,56 @@ with SPACE.
 
 Pressing F10 exits the client.
 
+Command Line Interface (CLI) Mode
+=================================
+
+As an alternative to interactive usage, MAENMPC may also be used as a CLI
+service. The synopsis is as follows:
+
+~~~
+USAGE maenmpc foreground                          -- run regularly
+USAGE maenmpc foreground -help                    -- this page
+USAGE maenmpc foreground -mpdsticker -gmbrc GMBRC -- import ratings
+USAGE maenmpc foreground -scrobble   -gmbrc GMBRC -- import playcounts
+USAGE maenmpc foreground -export-stickers SQLITE  -- export ratings+playcounts
+USAGE maenmpc foreground -import-scrobbles JSON   -- import scrobbles
+
+USAGE maenmpc foreground [-server MPDNAME] [-radio] [-scrobble] [-podcast]
+-server MPDNAME     specifies the name of the MPD to use for radio/scrobble
+-radio              enables the radio non-interactively
+-scrobble           enables the scrobbler non-interactively (ignores -server)
+-podcast            enables the podcast functionality non-interactively
+~~~
+
+These functions can be grouped as follows:
+
+## Functions for Migration from Gmusicbrowser
+
+Arguments `-mpdsticker` and `-scrobble` can be used to generate sticker entries
+and scrobble values from a GMBRC file as used by gmusicbrowser.
+
+## Functions for Offline Satellite Usage
+
+When running with an offline satellite which only scrobbles to local files, tere
+may be a chance to import these scrobbles back into Maloja. The
+`import-scrobbles` function serves to implement this, expecting to be presented
+with one scrobble per line. Similarly, `-export-stickers` generates a stickers
+database containing the ratings _and_ playcounts such that it becomes possible
+to run an instance even without access to a central Maloja.
+
+## Functions for Server Usage
+
+Usually, MAENMPC may be controlled through the TUI. If only the special
+functions like Radio/Scrobble/Podcast are of interest, MAENMPC can also run them
+as a daemon. Multiple arguments of `-radio`, `-scrobble` and `-podcast` may be
+combined to run multiple of these services in the same erlang VM.
+
+This feature also allows making use of advanced MAENMPC features in conjunction
+with any existing client such as long as there is an agreement about the
+storage format for ratings. Playcounts could be maintained separately between
+clients but it is generally recommended to have a single source of truth
+(e.g. Maloja) for this purpose.
+
 License
 =======
 
@@ -882,12 +932,6 @@ Future Directions
    increase stability.
  * Improve performance. Some easy optimizations like reducing the number of
    metadata tags queried from MPD are still available!
- * Integrate a scrobble-to-file (and import scroble from file) functionality
-   that may be used on satellite machines without access to the central Maloja
-   instance.
- * Allow running the services independently of the TUI (like a daemon).
-   This would enable the usage of the Radio functionality for users of
-   other clients like myMPD or Cantata.
  * Allow generation of playlists according to the Radio algorithm also in
    persistent formats like M3U for use with non-MAENMPC players.
 
