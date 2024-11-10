@@ -39,10 +39,10 @@ normalize_key(Value) ->
 	normalize_always(normalize_safe(Value)).
 
 normalize_safe(Value) ->
-	re:replace(string:replace(string:replace(
+	re:replace(string:replace(string:replace(string:replace(
 				lists:join(<<" ">>, string:lexemes(Value, " ")),
-			"[", "("), "]", ")"),
-		" \\(?feat\\.? .*$", "").
+			"[", "(", all), "]", ")", all), "’", "'", all),
+		" (\\(?feat(\\.|uring)?|vs\\.) .*$", "").
 
 normalize_always(Value) ->
 	unicode:characters_to_nfc_binary(Value).
