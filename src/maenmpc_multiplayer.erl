@@ -275,7 +275,13 @@ check_in_range(#dbscroll{cnt=Cnt, coffset=COffset, total=Total,
 					last_query_len=R, qoffset=QOffset}) ->
 	Len = length(Cnt),
 	if
-	COffset < 0 orelse Len - COffset < R ->
+	% andalso condition is to ensure that out_of_range is only generated if
+	% there is a chance to get some more/different data i.e. either we know
+	% that there is something beyond the current query limit or the total
+	% count is so low that it is very plausible we haven't even initialized
+	% it properly
+	COffset < 0 orelse Len - COffset < 0 orelse (Len - COffset < R andalso
+				(QOffset + Len < Total orelse Total < 1)) ->
 		out_of_range;
 	COffset =< R andalso QOffset /= 0 ->
 		{in_range, query_before};
