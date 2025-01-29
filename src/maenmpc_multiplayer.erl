@@ -766,8 +766,10 @@ ui_selected_action(Page, Action, Ctx) ->
 
 edit_rating(Ctx, Page, Cnt, [UIF|_UIT], Delta) ->
 	NewR   = call_singleplayer(Ctx#mpl.mpd_ratings, {rating, Delta, UIF}),
-	NewCnt = lists:keyreplace(UIF#dbsong.key, #dbsong.key, Cnt,
-						UIF#dbsong{rating=NewR}),
+	NewCnt = [case DBS#dbsong.key =:= UIF#dbsong.key of
+				true  -> DBS#dbsong{rating=NewR};
+				false -> DBS
+			end || DBS <- Cnt],
 	case Page of
         queue ->
 		NewQueue = Ctx#mpl.current_queue#dbscroll{cnt=NewCnt},
