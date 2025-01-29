@@ -579,7 +579,11 @@ draw_results(Ctx, List=#dbscroll{cnt=Cnt, total=Total,
 			case IsSel of true -> S; false -> SelIn end
 		end, none, lists:zip(Cnt, lists:seq(DY, length(Cnt) + DY - 1))),
 	lists:foreach(fun(Y) -> draw_scroll(Ctx, SHeight, SOffset + DY, Y) end,
-				lists:seq(length(Cnt) + DY, MaxDraw)),
+		case length(Cnt) + DY of
+		TailStart when TailStart =< MaxDraw ->
+			lists:seq(TailStart, MaxDraw);
+		_Any -> []
+		end),
 	cecho:wrefresh(Ctx#view.wnd_main),
 	case SelVal of
 	none -> Ctx;
