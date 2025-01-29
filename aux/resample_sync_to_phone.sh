@@ -5,6 +5,8 @@
 # $ abcde -o flac -a default,embedalbumart        # copy music from CD
 # $ loudgain -a -k -s e *.flac                    # for each album
 #
+# $ loudgain -I3 -S -L -a -k -s e *.mp3           # for MP3 album
+#
 # Single file commands
 # $ loudgain -r           -k -s e FILE.flac
 # $ loudgain -I3 -S -L -r -k -s e FILE.mp3

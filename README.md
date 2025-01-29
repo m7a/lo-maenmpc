@@ -10,7 +10,7 @@ x-masysma-version: 1.0.0
 x-masysma-website: https://masysma.net/32/maenmpc.xhtml
 x-masysma-repository: https://www.github.com/m7a/lo-maenmpc
 x-masysma-owned: 1
-x-masysma-copyright: (c) 2024 Ma_Sys.ma <info@masysma.net>.
+x-masysma-copyright: (c) 2024, 2025 Ma_Sys.ma <info@masysma.net>.
 ---
 Background
 ==========
@@ -151,8 +151,9 @@ MAENMPC is written in Erlang. It makes use of libraries to draw its UI with
 NCurses (`cecho`) and to communicate with MPD (`erlmpd`). In order to work
 correctly with MAENMPC, both libraries have to be patched.
 
-There are two way to go about this. If you are running a Debian-based system,
-compile and install the following packages according to their build instructions:
+There are two ways to go about this. If you are running a Debian-based system,
+compile and install the following packages according to their build
+instructions:
 
  1. Install [erlmpd(32)](../32/erlmpd.xhtml) -- see _MDPC 2.0 Integration_
  2. Install cecho using the build instructions at
@@ -229,15 +230,15 @@ a productive setup. It is found under `config/sys.config`:
 				% optional, if resampling is wanted
 				{samplerate, 88200},
 				% target file on local or remote file system
-				{target_fs, "/data/programs/music2/track/x_podcast/podcast.flac"},
+				{target_fs, "/data/programs/music2/epic/x_podcast/podcast.flac"},
 				% same file as referred to from MPD
-				{target_mpd, "track/x_podcast/podcast.flac"}
+				{target_mpd, "track/epic/podcast.flac"}
 			]},
 			{m16, [
 				% SSH example
 				{samplerate, 96000},
-				{target_fs, "/var/lib/mpd/music/track/x_podcast/podcast.flac"},
-				{target_mpd, "track/x_podcast/podcast.flac"},
+				{target_fs, "/var/lib/mpd/music/epic/x_podcast/podcast.flac"},
+				{target_mpd, "epic/x_podcast/podcast.flac"},
 				% SSH-specific keys passed as options, some we parse
 				% ourselves - NB there may need to be some test command
 				% line that users may enter to setup the user_dir?
@@ -358,17 +359,17 @@ known to MPD. E.g. for the `local` example configuration this looks as follows:
 		% optional, if resampling is wanted
 		{samplerate, 88200},
 		% target file on local or remote file system
-		{target_fs, "/data/programs/music2/track/x_podcast/podcast.flac"},
+		{target_fs, "/data/programs/music2/epic/x_podcast/podcast.flac"},
 		% same file as referred to from MPD
-		{target_mpd, "track/x_podcast/podcast.flac"}
+		{target_mpd, "epic/x_podcast/podcast.flac"}
 	]},
 ~~~
 
 Here, the podcast episode is copied to location
-`/data/programs/music2/track/x_podcast/podcast.flac` and because MPD's music
+`/data/programs/music2/epic/x_podcast/podcast.flac` and because MPD's music
 directory is configured (externally, in `mpd.conf`) as `/data/programs/music2`,
 the result file name from an MPD client point of view is
-`track/x_podcast/podcast.flac`.
+`epic/x_podcast/podcast.flac`.
 
 The `samplerate` key is optional: If it is present, `ReSampler` is invoked
 to convert a new podcast episode to the given sample rate. As many podcasts
@@ -917,7 +918,7 @@ License
 =======
 
 	Ma_Sys.ma Erlang NCurses Music Player Client - MAENMPC
-	(c) 2024 Ma_Sys.ma <info@masysma.net>
+	(c) 2024, 2025 Ma_Sys.ma <info@masysma.net>
 	
 	This program is free software: you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
@@ -938,11 +939,6 @@ Future Directions
    metadata tags queried from MPD are still available!
  * Allow generation of playlists according to the Radio algorithm also in
    persistent formats like M3U for use with non-MAENMPC players.
-
-## Known Bugs
-
- * There seems to be a minimum number in the “List” screen if this has fewer
-   entries than a single screen worth it may not be possible to navigate at all!
 
 Summary of Impressions from other Clients
 =========================================
@@ -1031,7 +1027,7 @@ looks quite minimalist but behind the small icons, it hides many features and
 customization options.
 
 myMPD supports ratings and play counts, storing both of them in the MPD
-stickers database. Compared to Cantata, myMPD has more options to also display
+stickers database. Compared to Cantata, myMPD has more options and also displays
 the ratings in overviews. Within some limits, default actions can also be
 configured as to reduce the error potential from accidentally clicking on a
 song.

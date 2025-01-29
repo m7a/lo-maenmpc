@@ -162,9 +162,9 @@ draw_page_help(Ctx) ->
 	cecho:werase(Ctx#view.wnd_main),
 	X0 = max(0, (Ctx#view.width - 78) div 2),
 	cecho:mvwaddstr(Ctx#view.wnd_main, 1, X0 + 7, "Ma_Sys.ma Erlang " ++
-				"NCurses Music Player Client -- M A E N M P C"),
-	cecho:mvwaddstr(Ctx#view.wnd_main, 2, X0, "(c) 2024 Ma_Sys.ma " ++
-		"<info@masysma.net>. For documentation, consult README.md"),
+			"NCurses Music Player Client -- M A E N M P C"),
+	cecho:mvwaddstr(Ctx#view.wnd_main, 2, X0, "(c) 2024, 2025 Ma_Sys.ma " ++
+			"<info@masysma.net>. For docs, consult README.md"),
 	Default = ?ceCOLOR_PAIR(?CPAIR_DEFAULT),
 	Accent = case Ctx#view.cidx of
 		1    -> ?ceCOLOR_PAIR(?CPAIR_ACCENT1);
@@ -411,8 +411,6 @@ single_key_action(Ctx, Character) ->
 	% TODO x undocumented keybindings!
 	$h               -> ui_request(Ctx, {ui_horizontal, Ctx#view.page, -1});
 	$l               -> ui_request(Ctx, {ui_horizontal, Ctx#view.page, +1});
-	% TODO F5       - search screen
-	% TODO p        - podcasts
 	% TODO Space    - expand/contract
 	% TODO CTRL-K/J - move item in playlist
 	_Any             -> Ctx
@@ -503,7 +501,7 @@ draw_song_and_status(Ctx, Info) ->
 	cecho:mvwaddstr(Ctx#view.wnd_card, 0, 1, BitrateCurrent),
 	cecho:mvwaddstr(Ctx#view.wnd_card, 1, 1, BitrateOther),
 	cecho:mvwaddstr(Ctx#view.wnd_card, 2, 1, BitrateCard),
-	cecho:mvwaddstr(Ctx#view.wnd_card, 0, 21, "MAENMPC 0.1.1"),
+	cecho:mvwaddstr(Ctx#view.wnd_card, 0, 21, "MAENMPC 0.1.2"),
 	cecho:mvwaddstr(Ctx#view.wnd_card, 1, 21, Volume),
 	cecho:mvwaddstr(Ctx#view.wnd_card, 2, 21, InfoChars),
 	cecho:attroff(Ctx#view.wnd_card, ?ceCOLOR_PAIR(?CPAIR_DEFAULT)),
