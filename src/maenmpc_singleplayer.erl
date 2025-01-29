@@ -106,7 +106,7 @@ handle_call({query_artists, QList, Filter, FRating}, _From, Ctx) ->
 
 		[filter_frating([query_rating(parse_metadata(El, Ctx), Conn,
 					Ctx) || El <- erlmpd:find(Conn, {land,
-					[{tagop, artist, eq, Artist},
+					[{tagop, albumartist, eq, Artist},
 					Filter]})], FRating) || Artist <- QList]
 	end), Ctx};
 handle_call(query_output, _From, Ctx) ->
