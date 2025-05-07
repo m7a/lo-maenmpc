@@ -738,7 +738,7 @@ effect:
 `/` and `?` are inspired by the VIM search. It is a separate search feature from
 the one provided by [F5] and both of those features may be combined.
 
-## [F2] - Qeueue
+## [F2] - Queue
 
 ![Another Screenshot of the Queue screen](maenmpc_att/scr_queue_2.png)
 
@@ -894,8 +894,8 @@ and scrobble values from a GMBRC file as used by gmusicbrowser.
 
 ## Functions for Offline Satellite Usage
 
-When running with an offline satellite which only scrobbles to local files, tere
-may be a chance to import these scrobbles back into Maloja. The
+When running with an offline satellite which only scrobbles to local files,
+there may be a chance to import these scrobbles back into Maloja. The
 `import-scrobbles` function serves to implement this, expecting to be presented
 with one scrobble per line. Similarly, `-export-stickers` generates a stickers
 database containing the ratings _and_ playcounts such that it becomes possible
