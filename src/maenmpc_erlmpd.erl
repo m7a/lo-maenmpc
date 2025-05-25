@@ -15,7 +15,7 @@ to_dbsong(Entry, Idx, Len) ->
 								Idx, Len),
 		playcount    = -1,
 		rating       = ?RATING_UNRATED,
-		duration     = proplists:get_value('Time',  Entry, 1),
+		duration     = max(1, proplists:get_value('Time',  Entry, 1)),
 		year         = proplists:get_value('Date',  Entry, <<>>),
 		trackno      = proplists:get_value('Track', Entry, 0),
 		audios       = new_tuple(proplists:get_value('Format', Entry,

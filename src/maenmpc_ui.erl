@@ -527,7 +527,7 @@ draw_basic_song_info(WndSong, DBE, Y0) ->
 			[DBE#dbsong.trackno, element(3, DBE#dbsong.key)]))),
 	cecho:mvwaddstr(WndSong, 1, PadWidth - 4,
 			maenmpc_erlmpd:format_rating(DBE#dbsong.rating)),
-	PadWidth.
+	max(0, PadWidth).
 
 utf8pad(Pad, Str) ->
 	SL = string:length(Str),
@@ -538,8 +538,8 @@ utf8pad(Pad, Str) ->
 	end.
 
 progress(PadWidth, Pos, OfTime) ->
-	BarWidth  = PadWidth - 14,
-	FillChars = Pos * BarWidth div OfTime,
+	BarWidth  = max(0, PadWidth - 14),
+	FillChars = min(Pos * BarWidth div OfTime, BarWidth),
 	io_lib:format("~s~s [~2..0w:~2..0w|~2..0w:~2..0w]",
 		[lists:duplicate(FillChars, $#),
 		lists:duplicate(BarWidth - FillChars, $_),
